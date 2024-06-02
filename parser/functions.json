@@ -2,6 +2,7 @@
     {
         "title": "What is this?",
         "params": [],
+        "image_required": true,
         "functions": [
             {
                 "name": "predict_hierarchical",
@@ -13,6 +14,7 @@
     },
     {
         "title": "What kind of {root_concept_name} is this?",
+        "image_required": true,
         "params": [
             "root_concept_name"
         ],
@@ -27,22 +29,24 @@
         ]
     },
     {
-        "title": "Is there a {part} in the image?",
+        "title": "Is there a {part_name} in the image?",
+        "image_required": true,
         "params": [
-            "part"
+            "part_name"
         ],
         "functions": [
             {
                 "name": "is_concept_in_image",
                 "args": [
                     "image",
-                    "part"
+                    "part_name"
                 ]
             }
         ]
     },
     {
         "title": "What are the differences between these two images?",
+        "image_required": true,
         "params": [],
         "functions": [
             {
@@ -56,16 +60,17 @@
     },
     {
         "title": "This is a {class}, a type of {superclass}",
+        "image_required": true,
         "params": [
             "class",
-            "superclass"
+            "parentclass"
         ],
         "functions": [
             {
                 "name": "add_hyponym",
                 "args": [
                     "class",
-                    "superclass"
+                    "parentclass"
                 ]
             },
             {
@@ -78,25 +83,26 @@
         ]
     },
     {
-        "title": "This is a {part}. {class_1} has {part}, but {class_2} does not.",
+        "title": "This is a {part_name}. {class_1} has {part_name}, but {class_2} does not.",
+        "image_required": true,
         "params": [
-            "part",
+            "part_name",
             "class_1",
-            "part",
+            "part_name",
             "class_2"
         ],
         "functions": [
             {
                 "name": "add_component_concept",
                 "args": [
-                    "part",
+                    "part_name",
                     "class_1"
                 ]
             },
             {
                 "name": "add_concept_negatives",
                 "args": [
-                    "part",
+                    "part_name",
                     "class_2"
                 ]
             },
@@ -104,7 +110,7 @@
                 "name": "train_concept",
                 "args": [
                     "image",
-                    "part"
+                    "part_name"
                 ]
             },
             {

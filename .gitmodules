@@ -1,3 +1,7 @@
 [submodule "ecole_mo9_demo"]
     path = ecole_mo9_demo
     url = https://github.com/AnselBlume/ecole_mo9_demo.git
+
+[submodule "ecole-ui"]
+    path = ecole-ui
+    url = https://github.com/duynguyen2001/ecole-ui.git
