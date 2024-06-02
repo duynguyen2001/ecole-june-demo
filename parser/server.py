@@ -144,7 +144,7 @@ async def generate_text(request: Request):
         match_template = obj["matched_template"]
         params = obj["params"]
         functions = obj["function"]
-        res_str = f"Matched template: {match_template['title']}\n + Parameters: {params}"
+        res_str = f"Matched template: {match_template['title']}\n + Parameters: {params} Function: {functions}"
         print(res_str)
         yield streaming_response_end(res_str, 0)
         # token_id = 0
