@@ -6,9 +6,9 @@
         "functions": [
             {
                 "name": "predict_hierarchical",
-                "args": [
-                    "image"
-                ]
+                "args": {
+                    "image": "image"
+                }
             }
         ]
     },
@@ -21,10 +21,10 @@
         "functions": [
             {
                 "name": "predict_from_subtree",
-                "args": [
-                    "image",
-                    "root_concept_name"
-                ]
+                "args": {
+                    "image": "image",
+                    "root_concept_name": "root_concept_name"
+                }
             }
         ]
     },
@@ -37,10 +37,10 @@
         "functions": [
             {
                 "name": "is_concept_in_image",
-                "args": [
-                    "image",
-                    "part_name"
-                ]
+                "args": {
+                    "image": "image",
+                    "part_name": "concept_name"
+                }
             }
         ]
     },
@@ -51,34 +51,35 @@
         "functions": [
             {
                 "name": "compare_images",
-                "args": [
-                    "image_1",
-                    "images_2"
-                ]
+                "args": {
+                    "image1": "image1",
+                    "image2": "image2"
+                }
             }
         ]
     },
     {
-        "title": "This is a {class}, a type of {superclass}",
+        "title": "This is a {child_class_name}, a type of {parent_class_name}",
         "image_required": true,
         "params": [
-            "class",
-            "parentclass"
+            "child_class_name",
+            "parent_class_name"
         ],
         "functions": [
             {
                 "name": "add_hyponym",
-                "args": [
-                    "class",
-                    "parentclass"
-                ]
+                "args": {
+                    "child_class_name": "child_name",
+                    "parent_class_name": "parent_name"
+                }
+                
             },
             {
                 "name": "train_concept",
-                "args": [
-                    "image",
-                    "class"
-                ]
+                "args": {
+                    "images": "images",
+                    "child_class_name": "concept_name"
+                }
             }
         ]
     },
@@ -88,45 +89,49 @@
         "params": [
             "part_name",
             "class_1",
-            "part_name",
             "class_2"
         ],
         "functions": [
             {
                 "name": "add_component_concept",
-                "args": [
-                    "part_name",
-                    "class_1"
-                ]
+                "args": {
+                    "part_name": "component_concept_name",
+                    "class_1": "concept_name"
+                }
             },
             {
                 "name": "add_concept_negatives",
-                "args": [
-                    "part_name",
-                    "class_2"
-                ]
+                "args": {
+                    "images": "images",
+                    "part_name": "component_concept_name",
+                    "class_2": "concept_name"
+                }
+              
             },
             {
                 "name": "train_concept",
-                "args": [
-                    "image",
-                    "part_name"
-                ]
+                "args": 
+                {
+                    "images": "images",
+                    "part_name": "concept_name"
+                }
             },
             {
                 "name": "train_concept",
-                "args": [
-                    "image",
-                    "class_1"
-                ]
+                "args": {
+                    "images": "images",
+                    "class_1": "concept_name"
+                }
             },
             {
                 "name": "train_concept",
-                "args": [
-                    "image",
-                    "class_2"
-                ]
+                "args": {
+                    "images": "images",
+                    "class_2": "concept_name"
+                }
+                
             }
+            
         ]
     }
 ]
