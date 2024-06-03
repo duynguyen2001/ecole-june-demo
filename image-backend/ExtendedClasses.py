@@ -329,7 +329,7 @@ class ExtendedController(Controller):
         #                     result["prediction"]["predicted_label"], img
         #                 )
         #                 result["heatmap"] = self.process_heatmap(heatmap)
-        return result
+        # return result
 
     #     ########################
     #     # Utils Functionality  #
@@ -435,7 +435,7 @@ class ExtendedController(Controller):
             torch.cuda.get_device_name(),
         )
         try:
-            # %% Train concept in isolation
+            # Train concept in isolation
             self.train_concept(concept_name, new_examples=concept_examples, n_epochs=10)
 
             if previous_concept_name:
@@ -544,11 +544,11 @@ class ExtendedController(Controller):
 #         return heatmap
 
 
-# # %%
+# %%
 
 
 if __name__ == "__main__":
-    
+
     import controller as ctrl
     from feature_extraction import build_feature_extractor, build_sam
     from image_processing import build_localizer_and_segmenter

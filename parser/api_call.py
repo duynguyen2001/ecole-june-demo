@@ -82,7 +82,14 @@ async def _make_request(function_name, args, files, user_id= "default_user"):
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream("POST", url, data=args, files=files) as response:
             async for chunk in response.aiter_text():
-                yield streaming_response_yield(chunk, 0)
+                if chunk.startswith("status: "):
+                    yield streaming_response_yield(chunk.replace("status: ", ""), 0)
+                elif chunk.startswith("error: "):
+                    yield streaming_response_end(chunk.replace("error: ", ""), 0)
+                elif chunk.startswith("result: "):
+                    yield streaming_response_yield(chunk.replace("result: ", "\n\n"), 0)
+                else:
+                    yield streaming_response_yield(chunk, 0)
 
 
 async def make_requests(functions, params, images, user_id = "default_user"):
