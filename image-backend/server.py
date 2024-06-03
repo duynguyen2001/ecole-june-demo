@@ -15,6 +15,10 @@ import torch
 from typing import List, Dict, Union, Any
 import concurrent.futures
 import pickle
+from fastapi.responses import StreamingResponse
+import os
+import io
+logger = logging.getLogger("uvicorn.error")
 
 LOC_SEG_CONCEPT_DIR = os.environ.get("LOC_SEG_CONCEPT_DIR")
 CACHE_DIR = os.environ.get("CACHE_DIR")
@@ -30,10 +34,10 @@ else:
 multiprocessing.set_start_method('spawn', force=True)
 
 logger = logging.getLogger("uvicorn.error")
-logger.info("Starting server...")
+logger.info(str("Starting server..."))
 
 # List available GPUs
-logger.info(f"GPUs available: {torch.cuda.device_count()}, current device: {torch.cuda.current_device()}")
+logger.info(str(f"GPUs available: {torch.cuda.device_count()}, current device: {torch.cuda.current_device()}"))
 
 sys.path.append("/shared/nas2/knguye71/ecole-backend/ods/src")
 from feature_extraction import (
@@ -48,13 +52,62 @@ import uuid
 import time
 import json
 from io import BytesIO
+def rle(x):
+    """
+    Perform run-length encoding on a boolean PyTorch tensor.
+    
+    Args:
+        tensor (torch.Tensor): A 1D boolean tensor to be encoded.
+        
+    Returns:
+        values (torch.Tensor): The unique values (0 or 1).
+        lengths (torch.Tensor): The lengths of the runs.
+    """
+    assert x.dim() == 1, "Input tensor must be a 1D tensor"
+    n = x.shape[0]
+    if n == 0:
+        return (
+            torch.tensor([], dtype=torch.int64),
+            torch.tensor([], dtype=torch.int64),
+            torch.tensor([], dtype=torch.bool),
+        )
+
+    # Find where the value changes
+    change_indices = (
+        torch.diff(
+            x,
+            prepend=torch.tensor([0], dtype=x.dtype),
+            append=torch.tensor([0], dtype=x.dtype),
+        )
+        .nonzero()
+        .flatten()
+    )
+
+    # Lengths of the runs
+    lengths = torch.diff(change_indices, prepend=torch.tensor([0])).to(
+        dtype=torch.int64
+    )
+
+    # Values of the runs
+    values = x[change_indices[:-1]]
+
+    return change_indices[:-1], lengths, values
+
 
 def convert_bool_tensor_to_byte_string(obj: torch.BoolTensor) -> str:
     # Convert a torch.BoolTensor to a byte string
+    # Flatten the N-D tensor to 1D
+    if (obj.shape == torch.Size([1])):
+        return True if obj[0] == 1 else False
+
+    shape = obj.shape
+    flattened_tensor = torch.flatten(obj)
+    indices, lengths, values = rle(flattened_tensor)
     return {
-        "type": "bool_tensor",
-        "shape": list(obj.shape),
-        "data": obj.numpy().tobytes().decode("utf-8", errors="ignore"),
+        "type": "bool_tensor_rle",
+        "shape": list(shape),
+        "data": lengths.numpy().tobytes().decode("utf-8", errors="ignore"),
+        "values": values.numpy().tobytes().decode("utf-8", errors="ignore"),
     }
 def convert_PIL_Image_to_byte_string(obj: PIL.Image.Image) -> str:
     # Convert a PIL.Image.Image to a byte string
@@ -75,14 +128,18 @@ def convert_to_serializable(obj: Any) -> Any:
     elif isinstance(obj, PIL.Image.Image):
         return convert_PIL_Image_to_byte_string(obj)
     elif isinstance(obj, dict):
-        # if "part_crops" in obj:
-        #     del obj["part_crops"]
+        if "part_crops" in obj:
+            obj["part_crops"] = []
+        # if "part_masks" in obj:
+        #     obj["part_masks"] = []
         return {key: convert_to_serializable(value) for key, value in obj.items()}
     elif isinstance(obj, list):
         return [convert_to_serializable(element) for element in obj]
     elif hasattr(obj, "__dict__"):
-        # if hasattr(obj, "part_crops"):
-        #     del obj.part_crops
+        if hasattr(obj, "part_crops"):
+            obj.part_crops = []
+        # if hasattr(obj, "part_masks"):
+        #     obj.part_masks = []
         return {
             key: convert_to_serializable(value) for key, value in obj.__dict__.items()
         }
@@ -102,20 +159,10 @@ def initialize_models(gpuid=0):
         )
     )
     default_kb.to(f"cuda:{gpuid}")
-    # retriever = CLIPConceptRetriever(
-    #     default_kb.concepts,
-    #     feature_extractor.clip,
-    #     feature_extractor.processor,
-    # )
 
     feature_pipeline = ConceptKBFeaturePipeline(loc_and_seg, feature_extractor)
     controller = ExtendedController(default_kb, feature_pipeline)
-
-    # controller = ExtendedController(
-    #     loc_and_seg, default_kb, feature_extractor, retriever
-    # )
-
-    logger.info("Models initialized")
+    logger.info(str("Models initialized"))
 
     models = {
         "sam": sam,
@@ -187,8 +234,8 @@ class Agent:
                 elif result[1] == "error":
                     import traceback
                     import sys
-                    print(traceback.format_exc())
-                    print(sys.exc_info())
+                    logger.error(traceback.format_exc())
+                    logger.error(sys.exc_info())
                     raise Exception(f"Error processing task {task_id}: {result[2]}")
                 else:
                     raise Exception(
@@ -196,8 +243,19 @@ class Agent:
                     )
 
     def shutdown(self):
-        self.input_queue.put((None, None, None, "shutdown", None, None))
-        self.process.join()
+        if self.process.is_alive():
+            self.input_queue.put((None, None, None, "shutdown", None, None))
+            self.process.join()
+        if not self.input_queue.empty():
+            self.input_queue.close()
+            self.input_queue.join_thread()
+        if not self.output_queue.empty():
+            self.output_queue.close()
+            self.output_queue.join_thread()
+        logger.info(str(f"Agent on GPU {self.gpuid} shut down"))
+        
+    def __del__(self):
+        self.shutdown()
 
 
 import os
@@ -238,9 +296,15 @@ class AgentManager:
             agent.shutdown()
         # for user_id in self.users_concept_kb:
         #     self.save_concept_kb(user_id)
-        with open(f"{self.save_path_concept_kb}/checkpoint_path_dict.json", "w") as f:
-            json.dump(self.checkpoint_path_dict, f)
-        print("All agents shut down and concept KBs saved")
+        # with open(f"{self.save_path_concept_kb}/checkpoint_path_dict.json", "w") as f:
+        #     json.dump(self.checkpoint_path_dict, f)
+
+        # Release the tensor from memory (if it's no longer needed)
+        gc.collect()
+        # Additionally, to clear unused memory from the GPU cache
+        torch.cuda.empty_cache()
+
+        logger.info(str("All agents shut down and concept KBs saved"))
 
     def get_next_agent_key(self):
         # Rotate the queue and return the next agent key
@@ -248,11 +312,12 @@ class AgentManager:
         return self.round_robin_queue[0]
 
     def get_concept_kb(self, user_id: str, agent):
+        
         if agent == None:
-            gpu_id = 0
+            RuntimeError("Agent is None")
         else:
             gpu_id = agent.gpuid
-        print(f"Getting concept KB for user {user_id}")
+        logger.info(str(f"Getting concept KB for user {user_id}"))
         if (
             user_id not in self.users_concept_kb
             and user_id not in self.checkpoint_path_dict
@@ -271,7 +336,7 @@ class AgentManager:
         # Drop the concept KB if number of kb exceeds 5
         if user_id in self.users_concept_kb and len(self.users_concept_kb) > 4:
             pop_id, user_kb = self.users_concept_kb.popitem(last=False)
-            print(f"user {pop_id} concept KB dropped")
+            logger.info(str(f"user {pop_id} concept KB dropped"))
             user_kb.to("cpu")  
             # Release the tensor from memory (if it's no longer needed)
             del user_kb
@@ -279,7 +344,7 @@ class AgentManager:
             # Additionally, to clear unused memory from the GPU cache
             torch.cuda.empty_cache()
         concept_kb.to(f"cuda:{gpu_id}")
-        print(f"Concept KB loaded for user {user_id} to CUDA {gpu_id}")
+        logger.info(str(f"Concept KB loaded for user {user_id} to CUDA {gpu_id}"))
         self.users_concept_kb[user_id] = concept_kb
         return concept_kb
 
@@ -316,8 +381,8 @@ class AgentManager:
         except Exception as e:
             import traceback
             import sys
-            print(traceback.format_exc())
-            print(sys.exc_info())
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
             raise Exception(f"Error in wrapper_user_id_no_save: {str(e)}")
         finally:
             if concept_kb is not None:
@@ -333,6 +398,8 @@ class AgentManager:
         try:
             # load concept kb by user_id
             concept_kb = self.get_concept_kb(user_id, self.agents[agent_key])
+            if concept_kb is None:
+                raise Exception(f"Error: Concept KB not found for user {user_id}")
             # Load user KB first
             self.agents[agent_key].call("controller", "load_kb", concept_kb)
 
@@ -381,7 +448,11 @@ class AgentManager:
         include_component_concepts: bool = False,
     ) -> list[dict]:
         result = self.wrapper_user_id_no_save(
-            user_id, "predict_hierarchical", image, unk_threshold, include_component_concepts
+            user_id,
+            "predict_hierarchical",
+            image,
+            unk_threshold,
+            include_component_concepts,
         )
         return convert_to_serializable(result)
 
@@ -405,9 +476,9 @@ class AgentManager:
         )
         return convert_to_serializable(result)
 
-    def add_hyponyms(self, user_id: str, child_name: str, parent_name: str, child_max_retrieval_distance: float = 0.):
+    def add_hyponym(self, user_id: str, child_name: str, parent_name: str, child_max_retrieval_distance: float = 0.):
         result = self.wrapper_user_id_save(
-            user_id, "add_hyponyms", child_name, parent_name, child_max_retrieval_distance
+            user_id, "add_hyponym", child_name, parent_name, child_max_retrieval_distance
         )
         return convert_to_serializable(result)
 
@@ -435,34 +506,8 @@ class AgentManager:
         )
         return convert_to_serializable(result)
 
-    # def diff_between_predictions(
-    #     self,
-    #     user_id: str,
-    #     image1: PIL.Image.Image,
-    #     image2: PIL.Image.Image,
-    #     threshold=0,
-    #     top_k=5,
-    # ):
-    #     result = self.wrapper_user_id_no_save(
-    #         user_id, "diff_between_predictions", image1, image2, threshold, top_k
-    #     )
-    #     return result
-
-    # def diff_concepts(self, user_id: str, concept1: str, concept2: str):
-    #     """
-    #     Returns the differences in the top k attributes between the two concepts.
-    #     """
-    #     concept1 = concept1.lower()
-    #     concept2 = concept2.lower()
-
-    #     result = self.wrapper_user_id_no_save(
-    #         user_id, "diff_concepts", concept1, concept2, top_k=5
-    #     )
-
-    #     return result
-
     def reset_kb(self, user_id: str, clear_all: bool = False):
-        print("clear all: ", clear_all)
+        logger.info(str(f"clear all: {clear_all}" ))
         if user_id == "":
             user_id = "default_user"
         if user_id  in self.users_concept_kb:
@@ -506,7 +551,7 @@ class AgentManager:
             )
             with open(path, "wb") as f:
                 pickle.dump(loc_seg_output, f)
-            print("Loc and seg single image time: ", time.time() - time_start)
+            logger.info(str("Loc and seg single image time: " + str(time.time() - time_start)))
             return ConceptExample(
                 image_path=image_path,
                 image_segmentations_path=path,
@@ -530,15 +575,17 @@ class AgentManager:
         )
         return {"status": "success"}
 
-    def train_concept(
+    async def train_concept(
         self, user_id: str, concept_name: str, images: list[PIL.Image.Image], previous_concept=None
     ):
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images)
-        print("Loc and seg time: ", time.time() - time_start)
+        logger.info(str("Loc and seg time: " + str(time.time() - time_start)))
+        yield f"status: Loc and seg time: {time.time() - time_start}"
         time_start = time.time()
         self._train_concept(user_id, concept_name, concept_examples, previous_concept)
-        print("Teach concept time: ", time.time() - time_start)
+        logger.info(str("Teach concept time: " + str(time.time() - time_start)))
+        yield f"status: Teach concept time: {time.time() - time_start}"
 
     def get_zs_attributes(self, user_id: str, concept_name: str):
         return self.wrapper_user_id_no_save(user_id, "get_zs_attributes", concept_name)
@@ -636,10 +683,10 @@ async def agent_lifespan(agent):
 async def lifespan(app: FastAPI):
     agent_manager = AgentManager()
     app.state.agentmanager = agent_manager
-    print("AgentManager initialized")
+    logger.info(str("AgentManager initialized"))
     yield
     agent_manager.shutdown()
-    print("AgentManager shut down")
+    logger.info(str("AgentManager shut down"))
 
 app.router.lifespan_context = lifespan
 
@@ -652,233 +699,466 @@ app.router.lifespan_context = lifespan
 # Predict methods          #
 ############################
 
-@app.post("/predict-concept", tags=["predict"])
+
+@app.post("/predict_concept", tags=["predict"])
 async def predict_concept(
     user_id: str = Form(...),  # Required field
     image: UploadFile = File(...),  # Required file upload,
     threshold: str = "0.7",
+    streaming: str = "false",
 ):
-    time_start = time.time()
-    # Convert to PIL Image
-    img = Image.open(image.file)
-    img = img.convert("RGB")
-    # try:
-    if user_id == "":
-        user_id = "default_user"
-    try:
-        # Call your segmentation function (assuming `server.run_segmentation` is defined elsewhere)
-        result = app.state.agentmanager.predict_concept(
-            user_id, img, float(threshold)
+    if streaming == "true":
+        img = Image.open(image.file).convert("RGB")
+        async def streamer(img, threshold):
+            time_start = time.time()
+            # Convert to PIL Image
+            yield "status: Predicting concept..."
+            try:
+                result = app.state.agentmanager.predict_concept(user_id, img, float(threshold))
+                logger.info(str("Predict concept time: " + str(time.time() - time_start)))
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(img, threshold),
+            media_type="text/event-stream",
         )
-        print("Predict concept time: ", time.time() - time_start)
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+    else:
+        time_start = time.time()
+        # Convert to PIL Image
+        img = Image.open(image.file)
+        img = img.convert("RGB")
+        try:
+            result = app.state.agentmanager.predict_concept(user_id, img, float(threshold))
+            logger.info(str("Predict concept time: " + str(time.time() - time_start)))
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/predict-from-subtree", tags=["predict"])
+@app.post("/predict_from_subtree", tags=["predict"])
 async def predict_from_subtree(
     user_id: str = Form(...),  # Required field
     image: UploadFile = File(...),  # Required file upload,
     root_concept_name: str = Form(...),  # Required field
     unk_threshold: str = "0.1",
-):
-    time_start = time.time()
-    # Convert to PIL Image
-    img = Image.open(image.file)
-    img = img.convert("RGB")
-    try:
-        result = app.state.agentmanager.predict_from_subtree(
-            user_id, img, root_concept_name, float(unk_threshold)
+    streaming: str = "false",
+):  
+    if streaming == "true":
+        img = Image.open(image.file).convert("RGB")
+        async def streamer(img, root_concept_name, unk_threshold):
+            time_start = time.time()
+            # Convert to PIL Image
+            yield "status: Predicting from subtree..."
+            try:
+                result = app.state.agentmanager.predict_from_subtree(
+                    user_id, img, root_concept_name, float(unk_threshold)
+                )
+                logger.info(str("Predict from subtree time: " + str(time.time() - time_start)))
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(img, root_concept_name, unk_threshold),
+            media_type="text/event-stream",
         )
-        print("Predict from subtree time: ", time.time() - time_start)
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+    else:
+        time_start = time.time()
+        # Convert to PIL Image
+        img = Image.open(image.file)
+        img = img.convert("RGB")
+        try:
+            result = app.state.agentmanager.predict_from_subtree(
+                user_id, img, root_concept_name, float(unk_threshold)
+            )
+            logger.info(str("Predict from subtree time: " + str(time.time() - time_start)))
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/predict-hierarchical", tags=["predict"])
+@app.post("/predict_hierarchical", tags=["predict"])
 async def predict_hierarchical(
     user_id: str = Form(...),  # Required field
     image: UploadFile = File(...),  # Required file upload,
     unk_threshold: str = "0.1",
     include_component_concepts: str = "False",
+    streaming: str = "false",
 ):
-    time_start = time.time()
-    # Convert to PIL Image
-    img = Image.open(image.file)
-    img = img.convert("RGB")
-    try:
-        result = app.state.agentmanager.predict_hierarchical(
-            user_id, img, float(unk_threshold), include_component_concepts
+    if streaming == "true":
+        img = Image.open(image.file).convert("RGB")
+        async def streamer(img, unk_threshold, include_component_concepts):
+            time_start = time.time()
+            # Convert to PIL Image
+            
+            yield "status: Predicting hierarchical..."
+            try:
+                result = app.state.agentmanager.predict_hierarchical(
+                    user_id, img, float(unk_threshold), include_component_concepts
+                )
+                logger.info(str("Predict hierarchical time: " + str(time.time() - time_start)))
+                
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(img, unk_threshold, include_component_concepts),
+            media_type="text/event-stream",
         )
-        print("Predict hierarchical time: ", time.time() - time_start)
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+    else:
+        time_start = time.time()
+        # Convert to PIL Image
+        img = Image.open(image.file)
+        img = img.convert("RGB")
+        try:
+            result = app.state.agentmanager.predict_hierarchical(
+                user_id, img, float(unk_threshold), include_component_concepts
+            )
+            logger.info(str("Predict hierarchical time: " + str(time.time() - time_start)))
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
+        
 
 
-@app.post("/predict-root-concept", tags=["predict"])
+@app.post("/predict_root_concept", tags=["predict"])
 async def predict_root_concept(
     user_id: str = Form(...),  # Required field
     image: UploadFile = File(...),  # Required file upload,
     unk_threshold: str = "0.1",
+    streaming: str = "false",
 ):
-    time_start = time.time()
-    # Convert to PIL Image
-    img = Image.open(image.file)
-    img = img.convert("RGB")
-    try:
-        result = app.state.agentmanager.predict_root_concept(
-            user_id, img, float(unk_threshold)
-        )
-        print("Predict root concept time: ", time.time() - time_start)
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+    if streaming == "true":
+        img = Image.open(image.file).convert("RGB")
+        async def streamer(img, unk_threshold):
+            time_start = time.time()
+            # Convert to PIL Image
+            yield "status: Predicting root concept..."
+            try:
+                result = app.state.agentmanager.predict_root_concept(
+                    user_id, img, float(unk_threshold)
+                )
+                logger.info(str("Predict root concept time: " + str(time.time() - time_start)))
+                logger.info(str("result", result))
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
 
-@app.post("/is-concept-in-image", tags=["predict"])
+        return StreamingResponse(
+            streamer(img, unk_threshold),
+            media_type="text/event-stream",
+        )
+    else:
+        time_start = time.time()
+        # Convert to PIL Image
+        img = Image.open(image.file)
+        img = img.convert("RGB")
+        try:
+            result = app.state.agentmanager.predict_root_concept(
+                user_id, img, float(unk_threshold)
+            )
+            logger.info(str("Predict root concept time: " + str(time.time() - time_start)))
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/is_concept_in_image", tags=["predict"])
 async def is_concept_in_image(
     user_id: str = Form(...),  # Required field
     image: UploadFile = File(...),  # Required file upload,
     concept_name: str = Form(...),  # Required field
     unk_threshold: str = "0.1",
-):
-    time_start = time.time()
-    # Convert to PIL Image
-    img = Image.open(image.file)
-    img = img.convert("RGB")
-    try:
-        result = app.state.agentmanager.is_concept_in_image(
-            user_id, img, concept_name, float(unk_threshold)
+    streaming: str = "false",
+):  
+    if streaming == "true":
+        img = Image.open(image.file).convert("RGB")
+        async def streamer(img, concept_name, unk_threshold):
+            time_start = time.time()
+            # Convert to PIL Image
+            yield "status: Checking if concept in image..."
+            try:
+                result = app.state.agentmanager.is_concept_in_image(
+                    user_id, img, concept_name, float(unk_threshold)
+                )
+                logger.info(str("Is concept in image time: " + str(time.time() - time_start)))
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(img, concept_name, unk_threshold),
+            media_type="text/event-stream",
         )
-        print("Is concept in image time: ", time.time() - time_start)
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+    else:
+        time_start = time.time()
+        # Convert to PIL Image
+        img = Image.open(image.file)
+        img = img.convert("RGB")
+        try:
+            result = app.state.agentmanager.is_concept_in_image(
+                user_id, img, concept_name, float(unk_threshold)
+            )
+            logger.info(str("Is concept in image time: " + str(time.time() - time_start)))
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
 
 ###############
 # Kb Ops      #
 ###############
 
-@app.post("/reset-kb", tags=["kb_ops"])
+@app.post("/reset_kb", tags=["kb_ops"])
 async def reset_kb(
     user_id: str = Form(...),  # Required field
     clear_all: str = "False",
+    streaming: str = "false",
 ):
-    try:
-        if clear_all == "True":
-            app.state.agentmanager.reset_conceptkb(user_id, True)
-        else:
-            app.state.agentmanager.reset_conceptkb(user_id, False)
+    if streaming == "true":
+        async def streamer(user_id, clear_all):
+            time_start = time.time()
+            yield "status: Resetting concept KB..."
+            try:
+                if clear_all == "True":
+                    app.state.agentmanager.reset_kb(user_id, True)
+                else:
+                    app.state.agentmanager.reset_kb(user_id, False)
+                logger.info(str("Reset concept KB time: " + str(time.time() - time_start)))
+                yield "status: Reset successful"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
 
-        return Response(status_code=200)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        return StreamingResponse(
+            streamer(user_id, clear_all),
+            media_type="text/event-stream",
+        )
+    else:
+        try:
+            if clear_all == "True":
+                app.state.agentmanager.reset_conceptkb(user_id, True)
+            else:
+                app.state.agentmanager.reset_conceptkb(user_id, False)
 
-@app.post("/add-hyponyms", tags=["kb_ops"])
-async def add_hyponyms(
+            return Response(status_code=200)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/add_hyponym", tags=["kb_ops"])
+async def add_hyponym(
     user_id: str = Form(...),  # Required field
     child_name: str = Form(...),  # Required field
     parent_name: str = Form(...),  # Required field
     child_max_retrieval_distance: str = "0",
+    streaming: str = "alse",
 ):
-    if user_id == "":
-        user_id = "default_user"
-    try:
-        result = app.state.agentmanager.add_hyponyms(
-            user_id, child_name, parent_name, float(child_max_retrieval_distance)
+    if streaming == "true":
+        async def streamer(user_id, child_name, parent_name, child_max_retrieval_distance):
+            time_start = time.time()
+            yield "status: Adding hyponyms..."
+            try:
+                result = app.state.agentmanager.add_hyponym(
+                    user_id, child_name, parent_name, float(child_max_retrieval_distance)
+                )
+                logger.info(str("Add hyponym time: " + str(time.time() - time_start)))
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(user_id, child_name, parent_name, child_max_retrieval_distance),
+            media_type="text/event-stream",
         )
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
+    else:
+        try:
+            result = app.state.agentmanager.add_hyponym(
+                user_id, child_name, parent_name, float(child_max_retrieval_distance)
+            )
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
 
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
-@app.post("/add-component-concept", tags=["kb_ops"])
+@app.post("/add_component_concept", tags=["kb_ops"])
 async def add_component_concept(
     user_id: str = Form(...),  # Required field
     component_concept_name: str = Form(...),  # Required field
     concept_name: str = Form(...),  # Required field
     component_max_retrieval_distance: str = "0",
+    streaming: str = "false",
 ):
-    if user_id == "":
-        user_id = "default_user"
-    try:
-        result = app.state.agentmanager.add_component_concept(
-            user_id, component_concept_name, concept_name, float(component_max_retrieval_distance)
+    if streaming == "true":
+        time_start = time.time()
+        async def streamer(user_id, component_concept_name, concept_name, component_max_retrieval_distance):
+            yield "status: Adding component concept..."
+            try:
+                result = app.state.agentmanager.add_component_concept(
+                    user_id, component_concept_name, concept_name, float(component_max_retrieval_distance)
+                )
+                logger.info(str("Add component concept time: " + str(time.time() - time_start)))
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+        return StreamingResponse(
+            streamer(user_id, component_concept_name, concept_name, component_max_retrieval_distance),
+            media_type="text/event-stream",
         )
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
+    else:
+        try:
+            result = app.state.agentmanager.add_component_concept(
+                user_id, component_concept_name, concept_name, float(component_max_retrieval_distance)
+            )
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
 
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
-@app.post("/add-concept-negatives", tags=["kb_ops"])
+@app.post("/add_concept_negatives", tags=["kb_ops"])
 async def add_concept_negatives(
     user_id: str = Form(...),  # Required field
     concept_name: str = Form(...),  # Required field
     negatives: list[UploadFile] = File(...),  # Required field
+    streaming: str = "false",
 ):
-    if user_id == "":
-        user_id = "default_user"
-    try:
-        negatives = [Image.open(negative.file).convert("RGB") for negative in negatives]
-        result = app.state.agentmanager.add_concept_negatives(
-            user_id, concept_name, negatives
+    if streaming == "true":
+        async def streamer(user_id, concept_name, negatives):
+            yield "status: Adding concept negatives..."
+            try:
+                negatives = [Image.open(negative.file).convert("RGB") for negative in negatives]
+                result = app.state.agentmanager.add_concept_negatives(
+                    user_id, concept_name, negatives
+                )
+                yield f"result: {json.dumps(result)}"
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(user_id, concept_name, negatives),
+            media_type="text/event-stream",
         )
-        return JSONResponse(content=result)
-    except Exception as e:
-        import traceback
-        import sys
+    else:
+        try:
+            negatives = [Image.open(negative.file).convert("RGB") for negative in negatives]
+            result = app.state.agentmanager.add_concept_negatives(
+                user_id, concept_name, negatives
+            )
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            import sys
 
-        print(traceback.format_exc())
-        print(sys.exc_info())
-        raise HTTPException(status_code=404, detail=str(e))
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
-@app.post("/train-concept", tags=["train"])
+@app.post("/train_concept", tags=["train"])
 async def train_concept(
     user_id: str = Form(...),  # Required field
     concept_name: str = Form(...),  # Required field
-    examples: List[UploadFile] = File(...),  # Required field
-    previous_concept: str = "None",
+    images: List[UploadFile] = File(...),  # Required field
+    # previous_concept: str = "None",
+    streaming: str = "false",
 ):
-    time_start = time.time()
-    img_list = [Image.open(example.file).convert("RGB") for example in examples]
-    try:
-        app.state.agentmanager.train_concept(user_id, concept_name, img_list, None if previous_concept == "None" else previous_concept)
-        print("Teach concept time: ", time.time() - time_start)
-        return {"status": "success"}
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    if streaming == "true":
+        async def streamer(user_id, concept_name, images):
+            yield "status: Training concept..."
+            try:
+                time_start = time.time()
+                images = [Image.open(image.file).convert("RGB") for image in images]
+                async for res in app.state.agentmanager.train_concept(user_id, concept_name, images):
+                    yield f"result: {res}"
+                logger.info(str("Train concept time: " + str(time.time() - time_start)))
+            except Exception as e:
+                import traceback
+                import sys
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
 
+        return StreamingResponse(
+            streamer(user_id, concept_name, images),
+            media_type="text/event-stream",
+        )
+    else:
+        time_start = time.time()
+        images = [Image.open(image.file).convert("RGB") for image in images]
+        try:
+            app.state.agentmanager.train_concept(user_id, concept_name, images)
+            logger.info(str("Train concept time: " + str(time.time() - time_start)))
+            return JSONResponse(content={"status": "success"})
+        except Exception as e:
+            import traceback
+            import sys
+
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise HTTPException(status_code=404, detail=str(e))
 
 # @app.post("/diff_between_predictions")
 # async def diff_between_predictions(
@@ -897,7 +1177,7 @@ async def train_concept(
 #         dict_result = app.state.agentmanager.diff_between_predictions(
 #             user_id, img1, img2, float(threshold)
 #         )
-#         print("Predict concept time: ", time.time() - time_start)
+#         print("Predict concept time: " + str(time.time() - time_start))
 #         return dict_result
 #     except Exception as e:
 #         raise HTTPException(status_code=404, detail=str(e))
@@ -915,7 +1195,7 @@ async def train_concept(
 #         user_id = "default_user"
 #     try:
 #         differences = app.state.agentmanager.diff_concepts(user_id, concept1, concept2)
-#         print("Predict concept time: ", time.time() - time_start)
+#         print("Predict concept time: " + str(time.time() - time_start))
 #         return differences
 #     except Exception as e:
 #         import traceback
@@ -931,7 +1211,7 @@ async def train_concept(
 #     img_list = [Image.open(example.file).convert("RGB") for example in examples]
 #     try:
 #         app.state.agentmanager.train_concept(user_id, concept_name, img_list, None if previous_concept == "None" else previous_concept)
-#         print("Teach concept time: ", time.time() - time_start)
+#         print("Teach concept time: " + str(time.time() - time_start))
 #         return {"status": "success"}
 #     except Exception as e:
 #         raise HTTPException(status_code=404, detail=str(e))
@@ -979,4 +1259,4 @@ async def train_concept(
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn')
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=16008)
+    uvicorn.run(app, host="0.0.0.0", port=16004)
