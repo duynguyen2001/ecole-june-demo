@@ -1,5 +1,12 @@
 samples/*
 __pycache__/*
 */**/__pycache__/*
+**/__pycache__/*
+/.pytest_cache
+**/__pycache__/*
+__pycache__/
+*.py[cod]
+*$py.class
 */.pytest
+**/__pycache__/
 cache/**
