@@ -6,7 +6,13 @@ from typing import Any
 
 START_TOKEN = "<|im_start|>"
 END_TOKEN = "<|im_end|>"
+class Counter:
+    def __init__(self):
+        self.count = 0
 
+    def increment(self):
+        self.count += 1
+        return self.count
 
 def clean_string(input_string: str) -> str:
     """
@@ -31,14 +37,15 @@ def clean_string(input_string: str) -> str:
     return cleaned_string
 
 
-def streaming_response_yield(output_string, index):
+def streaming_response_yield(output_string, counter: Counter):
+    counter.increment()
     return (
         "data: "
         + json.dumps(
             {
                 "token": {
-                    "id": str(index),
-                    "text": output_string + " ",
+                    "id": counter.count,
+                    "text": output_string + "\n\n",
                     "logprob": 0,
                     "special": False,
                 },
@@ -50,18 +57,20 @@ def streaming_response_yield(output_string, index):
     )
 
 
-def streaming_response_end(output_string, index):
+def streaming_response_end(output_string, counter: Counter):
+    # auto increment index
+    counter.increment()
     return (
         "data: "
         + json.dumps(
             {
                 "token": {
-                    "id": index,
+                    "id": counter.count,
                     "text": "",
                     "special": True,
                     "logprob": 0,
                 },
-                "generated_text": output_string,
+                "generated_text": f"""{output_string}\n\n""",
                 "details": {
                     "finish_reason": "eos_token",
                     "num_tokens": len(output_string.split()),
@@ -204,7 +213,7 @@ def extract_params_from_sentence_with_prompt(
 
     # Create and process prompt for each placeholder
     for placeholder in template_params:
-        prompt = f"The known template sentence is {template}. Extract the '{placeholder}' in curly brackets from this sentence: '{sentence}'.  The {placeholder} is:"
+        prompt = f"GPT4 Correct User: The known template is '{template}'. The sentence to analyze: '{sentence}'. What is the '{placeholder}' in the sentence?<|end_of_turn|>GPT4 Correct Assistant: In the sentence, the '{placeholder}' is "
         generated_text = generator(prompt, max_length=200, num_return_sequences=1)[0][
             "generated_text"
         ]

@@ -10,3 +10,6 @@ __pycache__/
 */.pytest
 **/__pycache__/
 cache/**
+image_dir/*
+conceptKB_ckpt/*
+tensor_dir/*

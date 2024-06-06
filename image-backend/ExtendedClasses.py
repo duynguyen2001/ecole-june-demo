@@ -32,17 +32,21 @@ from PIL import Image
 # import concurrent.futures
 
 # logger = logging.getLogger("uvicorn.error")
-DEFAULT_CKPT = os.environ.get("DEFAULT_CKPT", "/shared/nas2/knguye71/ecole-backend/ckpts/concept_kb_epoch_2021_06_29-15:00:00.pt")
+DEFAULT_CKPT = os.environ.get(
+    "DEFAULT_CKPT",
+    "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_03-00:42:32-dd87rspm-airplanes_v2-pp_fj/concept_kb_epoch_50.pt",
+)
 FEATURE_CACHE_DIR = os.environ.get("FEATURE_CACHE_DIR", "./feature_cache/")
 
 class ExtendedController(Controller):
 
     def predict_concept(
         self,
-        image= None,
+        image: Image = None,
         loc_and_seg_output = None,
         unk_threshold: float = 0.1,
         leaf_nodes_only: bool = True,
+        include_component_concepts: bool = False,
         restrict_to_concepts: list[str] = [],
     ) -> dict:
         """
@@ -50,31 +54,85 @@ class ExtendedController(Controller):
 
         Returns: dict with keys 'predicted_label' and 'plot' of types str and PIL.Image, respectively.
         """
+        # TODO Predict with loc_and_seg_output if provided; for use with modified segmentations/background removals
         self.cached_images.append(image)
 
-        try:
-            if restrict_to_concepts:
-                assert not leaf_nodes_only, 'Specifying concepts to restrict prediction to is only supported when leaf_nodes_only=False.'
-                concepts = [self.retrieve_concept(concept_name) for concept_name in restrict_to_concepts]
-            else:
-                concepts = None
+        if restrict_to_concepts:
+            assert (
+                not leaf_nodes_only
+            ), "Specifying concepts to restrict prediction to is only supported when leaf_nodes_only=False."
+            concepts = [
+                self.retrieve_concept(concept_name)
+                for concept_name in restrict_to_concepts
+            ]
+        else:
+            concepts = None
 
-            prediction = self.predictor.predict(
-                image_data=image,
-                unk_threshold=unk_threshold,
-                return_segmentations=True,
-                leaf_nodes_only=leaf_nodes_only,
-                concepts=concepts
-            )
-        except Exception as e:
-            print(traceback.format_exc())
-            # or
-            print(sys.exc_info()[2])
-            if "argmax" in str(e.with_traceback(sys.exc_info()[2])):
-                return {"predicted_label": "unknown", "is_below_unk_threshold": True}
-            return {"error": str(e.with_traceback(sys.exc_info()[2]))}
+        prediction = self.predictor.predict(
+            image_data=image,
+            unk_threshold=unk_threshold,
+            return_segmentations=True,
+            leaf_nodes_only=leaf_nodes_only,
+            include_component_concepts=include_component_concepts,
+            concepts=concepts,
+        )
+
+        self.cached_predictions.append(prediction)
 
         return prediction
+
+    def add_hyponym(
+        self,
+        child_name: str,
+        parent_name: str,
+        child_max_retrieval_distance: float = 0.0,
+    ):
+        parent = self.retrieve_concept(parent_name)
+
+        try:
+            child = self.retrieve_concept(
+                child_name, max_retrieval_distance=child_max_retrieval_distance
+            )
+        except RuntimeError:
+            child = self.add_concept(child_name, parent_concept_names=[parent_name])
+
+        child.add_parent_concept(parent)  # This sets the parent's child pointer as well
+        currentkb = self.concept_kb
+        currentkb.to("cpu")
+        return currentkb
+
+    def add_component_concept(
+        self,
+        component_concept_name: str,
+        concept_name: str,
+        component_max_retrieval_distance: float = 0.0,
+    ):
+        concept = self.retrieve_concept(concept_name)
+
+        try:
+            component = self.retrieve_concept(
+                component_concept_name,
+                max_retrieval_distance=component_max_retrieval_distance,
+            )
+        except RuntimeError:
+            component = self.add_concept(component_concept_name)
+
+        concept.add_component_concept(component)
+        concept.predictor.set_num_component_concepts(len(concept.component_concepts))
+        currentkb = self.concept_kb
+        currentkb.to("cpu")
+        return currentkb
+
+    def add_concept_negatives(self, concept_name: str, negatives: list[ConceptExample]):
+        assert all(
+            negative.is_negative for negative in negatives
+        ), "All ConceptExamples must have is_negative=True."
+
+        concept = self.retrieve_concept(concept_name)
+        concept.examples.extend(negatives)
+        currentkb = self.concept_kb
+        currentkb.to("cpu")
+        return currentkb
 
     def compare_concepts(self, concept_name1, concept_name2, top_k=5):
         try:

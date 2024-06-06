@@ -50,14 +50,141 @@
         "params": [],
         "functions": [
             {
-                "name": "compare_images",
+                "name": "heatmap_image_comparison",
                 "args": {
-                    "image1": "image1",
-                    "image2": "image2"
+                    "image_1": "image_1",
+                    "image_2": "image_2"
                 }
             }
         ]
     },
+    {
+        "title": "Why is this a {class_name}?",
+        "image_required": true,
+        "params": [
+            "class_name"
+        ],
+        "functions": [
+            {
+                "name": "heatmap",
+                "args": {
+                    "image": "image",
+                    "class_name": "concept_name"
+                },
+                "extra_args": {
+                    "only_score_increasing_regions": "true"
+                }
+            }
+        ]
+    },
+    {
+        "title": "What are the differences between this and {class_name}?",
+        "image_required": true,
+        "params": [
+            "class_name"
+        ],
+        "functions": [
+            {
+                "name": "heatmap",
+                "args": {
+                    "image": "image",
+                    "class_name": "concept_name"
+                },
+                "extra_args": {
+                    "only_score_decreasing_regions": "true"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Can you tell me the differences between {first_concept} and {second_concept}?",
+        "image_required": false,
+        "params": [
+            "first_concept",
+            "second_concept"
+        ],
+        "functions": [
+            {
+                "name": "heatmap_class_difference",
+                "args": {
+                    "first_concept": "concept1_name",
+                    "second_concept": "concept2_name"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Why is this a {first_concept}, but not {second_concept}?",
+        "image_required": true,
+        "params": [
+            "first_concept",
+            "second_concept"
+        ],
+        "functions": [
+            {
+                "name": "heatmap_class_difference",
+                "args": {
+                    "first_concept": "concept1_name",
+                    "second_concept": "concept2_name",
+                    "image": "image"
+                },
+                "extra_args": {
+                    "only_score_increasing_regions": "true"
+                }
+            }
+        ]
+    },
+    {
+        "title": "This is a {class_name}",
+        "image_required": true,
+        "params": [
+            "class_name"
+        ],
+        "functions": [
+            {
+                "name": "add_examples",
+                "args": {
+                    "images": "images",
+                    "class_name": "concept_name"
+                }
+            },
+            {
+                "name": "train_concepts",
+                "args": {
+                    "class_name": "concepts"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Reset the backend from scratch",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "reset_kb",
+                "args": {},
+                "extra_args": {
+                    "clear_all": "true"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Reset the backend from checkpoint",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "reset_kb",
+                "args": {},
+                "extra_args": {
+                    "clear_all": "false"
+                }
+            }
+        ]
+    },
+   
     {
         "title": "This is a {child_class_name}, a type of {parent_class_name}",
         "image_required": true,
@@ -72,31 +199,51 @@
                     "child_class_name": "child_name",
                     "parent_class_name": "parent_name"
                 }
-                
             },
             {
-                "name": "train_concept",
+                "name": "add_examples",
                 "args": {
                     "images": "images",
                     "child_class_name": "concept_name"
+                }
+            },
+            {
+                "name": "add_examples",
+                "args": {
+                    "images": "images",
+                    "parent_class_name": "concept_name"
+                }
+            },
+            {
+                "name": "train_concepts",
+                "args": {
+                    "child_class_name": "concepts",
+                    "parent_class_name": "concepts"
                 }
             }
         ]
     },
     {
-        "title": "This is a {part_name}. {class_1} has {part_name}, but {class_2} does not.",
+        "title": "This is a {part}. {first_concept} has {part_name}, but {second_concept} does not.",
         "image_required": true,
         "params": [
-            "part_name",
-            "class_1",
-            "class_2"
+            "part",
+            "first_concept",
+            "second_concept"
         ],
         "functions": [
             {
                 "name": "add_component_concept",
                 "args": {
-                    "part_name": "component_concept_name",
-                    "class_1": "concept_name"
+                    "part": "component_concept_name",
+                    "first_concept": "concept_name"
+                }
+            },
+            {
+                "name": "add_examples",
+                "args": {
+                    "images": "images",
+                    "part_name": "component_concept_name"
                 }
             },
             {
@@ -104,34 +251,17 @@
                 "args": {
                     "images": "images",
                     "part_name": "component_concept_name",
-                    "class_2": "concept_name"
-                }
-              
-            },
-            {
-                "name": "train_concept",
-                "args": 
-                {
-                    "images": "images",
-                    "part_name": "concept_name"
+                    "second_concept": "concept_name"
                 }
             },
             {
-                "name": "train_concept",
+                "name": "train_concepts",
                 "args": {
-                    "images": "images",
-                    "class_1": "concept_name"
+                    "first_concept": "concepts",
+                    "second_concept": "concepts",
+                    "part_name": "concepts"
                 }
-            },
-            {
-                "name": "train_concept",
-                "args": {
-                    "images": "images",
-                    "class_2": "concept_name"
-                }
-                
             }
-            
         ]
     }
 ]
