@@ -1,14 +1,14 @@
-from api_call import make_requests
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from model.Counter import Counter
-from server_utils import (get_last_user_input, match_template,
-                          streaming_response_end, streaming_response_yield,
-                          strip_tokens)
+from fastapi.responses import StreamingResponse
 from transformers import pipeline
-
-load_dotenv()
+from typing import Any
+import json
+import os
+from dotenv import load_dotenv
+import httpx
+from utils import streaming_response_yield, streaming_response_end, match_template, strip_tokens, get_last_user_input, Counter
+from api_call import make_requests
+load_dotenv("/shared/nas2/knguye71/ecole-june-demo/parser/.env")
 app = FastAPI()
 
 # Initialize the text generation pipeline
@@ -20,21 +20,13 @@ generator = pipeline(
 
 @app.get("/")
 async def read_root():
-    """
-    Return message you got to the correct endpoint. By default, the endpoint is /generate.
-
-    Returns:
-        str: The message.
-    """
-    return {"message": "You got to the correct endpoint. Please use the /generate endpoint to generate text."}
+    return {"Hello": "World"}
 
 
 @app.post("/generate")
 async def generate_text(request: Request) -> None:
     """
-    Generate text based on the input prompt. The input prompt should be a list of conversation turns.
-    The function will match the input prompt with a template and extract the parameters from the prompt.
-    The function will then call the required APIs to generate the text.
+    Generate text based on the input prompt.
 
     Args:
         request (Request): The request object.
@@ -50,28 +42,18 @@ async def generate_text(request: Request) -> None:
     data = await request.json()
     prompt = data["inputs"]
     userId = data["userId"] if "userId" in data else "default_user"
+    print(f"\n\n\n\nUser {userId}\n\n\n\n")
 
     conversations = strip_tokens(prompt)
 
     last_input = get_last_user_input(conversations)
 
-    # Generate text based on the input prompt
+    # Generate text
+
     async def text_streamer():
-        """
-        The main function that generates the text based on the input prompt. The function will match the input prompt with a template and extract the parameters from the prompt.
-
-        Yields:
-            str: The generated text. In format "data: {json}\n\n".
-        """
-
-        # Initialize the counter
         counter = Counter()
-
-        # Matching the last input prompt with a template
         prompt = last_input["prompt"]
         obj = match_template(generator, prompt)
-
-        # Get the template title, parameters, functions, and image_required flag
         template_title = obj["template_title"]
         params = obj["params"]
         functions = obj["functions"]
@@ -79,56 +61,40 @@ async def generate_text(request: Request) -> None:
 
         # Check if the template requires an image and if there is an image in the last input
         if image_required and len(last_input["images"]) == 0:
-            second_last_user_input = get_last_user_input(conversations, 1)
-            if second_last_user_input is not None and len(second_last_user_input["images"]) > 0:
-                last_input["images"] = second_last_user_input["images"]
-                res_str = "Processing...\n\n"
-            else:
-                third_last_user_input = get_last_user_input(conversations, 2)
-                if third_last_user_input is not None and len(third_last_user_input["images"]) > 0:
-                    last_input["images"] = third_last_user_input["images"]
-                    res_str = "Processing...\n\n"
-                else:
-                    yield streaming_response_end(
-                        "Sorry, but you forgot to input an image", counter
-                    )
-                
+            yield streaming_response_end(
+                "Sorry, but you forgot to input an image", counter
+            )
+            return
         elif template_title is not None:
-            # Show status message
-            res_str = "Processing...\n\n"
+            res_str = f"Template matched: {template_title}\nParameters extracted: {params}\n\n"
         else:
-            # if there is no template, just generate text
+            res_str = "No template matched." 
             llm_res = generator(prompt, max_length=50, num_return_sequences=1)
-            res_str = llm_res[0]["generated_text"]
+            res_str += llm_res[0]["generated_text"]
 
-        # yield the status message
         yield streaming_response_yield(res_str, counter)
 
-        # Initialize the last response string
         last_res_str = ""
-
-        # Update the last response string with the new chunk function
         def update_last_stream(chunk):
             nonlocal last_res_str
             last_res_str += chunk
 
-        # Call the APIs to generate the text
         if template_title is not None:
             async for response in make_requests(
                 functions, params, last_input["images"], userId, callback = update_last_stream
             ):
                 yield response
-
-        # yield the final response string, this will be the final response, only happens when all the APIs have been called successfully
+                
         yield streaming_response_end(last_res_str, counter)
+        # token_id = 0
+        # for text in result[0]["generated_text"].split():
+
+        #     yield streaming_response_yield(text, token_id)
+        #     token_id += 1
+
+        # yield streaming_response_end(result[0]["generated_text"], token_id)
 
     async def event_generator():
-        """
-        Wrapper function for the text_streamer function. This function will return a StreamingResponse object.
-
-        Yields:
-            str: The generated text. In format "data: {json}\n\n".
-        """
         event_gen = text_streamer()
         async for event in event_gen:
             # If the client has disconnected, stop the generator
@@ -138,30 +104,8 @@ async def generate_text(request: Request) -> None:
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.get("/health")
-def health():
-    """
-    Health check endpoint.
 
-    Returns:
-        dict: The health check response.
-    """
-    return {"status": "healthy"}
-import json
-
-
-@app.get("/commands")
-def commands():
-    """
-    Return the list of available commands.
-
-    Returns:
-        dict: The list of available commands.
-    """
-    with open("/shared/nas2/knguye71/ecole-june-demo/parser/functions.json") as f:
-        commands = json.load(f)
-    return JSONResponse(content=commands)
-# Run the server using uvicorn
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=8003)

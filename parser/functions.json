@@ -3,11 +3,9 @@
         "title": "What is this?",
         "params": [],
         "image_required": true,
-        "type": "question",
         "functions": [
             {
                 "name": "predict_hierarchical",
-                "description": "Predicting the most likely concept from the image...",
                 "args": {
                     "image": "image"
                 }
@@ -15,34 +13,14 @@
         ]
     },
     {
-        "title": "Why is that?",
-        "params": [],
-        "image_required": true,
-        "type": "question",
-        "functions": [
-            {
-                "name": "predict_hierarchical",
-                "description": "Predicting the most likely concept from the image...",
-                "args": {
-                    "image": "image"
-                },
-                    "extra_args": {
-                        "show_explanation": "true"
-                    }
-            }
-        ]
-    },
-    {
         "title": "What kind of {root_concept_name} is this?",
         "image_required": true,
-        "type": "question",
         "params": [
             "root_concept_name"
         ],
         "functions": [
             {
                 "name": "predict_from_subtree",
-                "description": "Predicting the most likely sub-concept of {root_concept_name} from the image....",
                 "args": {
                     "image": "image",
                     "root_concept_name": "root_concept_name"
@@ -52,7 +30,6 @@
     },
     {
         "title": "Is there a {part_name} in the image?",
-        "type": "question",
         "image_required": true,
         "params": [
             "part_name"
@@ -60,7 +37,6 @@
         "functions": [
             {
                 "name": "is_concept_in_image",
-                "description": "Checking if the image contains {part_name}...",
                 "args": {
                     "image": "image",
                     "part_name": "concept_name"
@@ -70,13 +46,11 @@
     },
     {
         "title": "What are the differences between these two images?",
-        "type": "question",
         "image_required": true,
         "params": [],
         "functions": [
             {
                 "name": "heatmap_image_comparison",
-                "description": "Comparing the two images...",
                 "args": {
                     "image_1": "image_1",
                     "image_2": "image_2"
@@ -85,8 +59,7 @@
         ]
     },
     {
-        "title": "Why do you think this is a {class_name}?",
-        "type": "question",
+        "title": "Why is this a {class_name}?",
         "image_required": true,
         "params": [
             "class_name"
@@ -94,7 +67,6 @@
         "functions": [
             {
                 "name": "heatmap",
-                "description": "Analyzing the image for the concept {class_name}...",
                 "args": {
                     "image": "image",
                     "class_name": "concept_name"
@@ -107,7 +79,6 @@
     },
     {
         "title": "What are the differences between this and {class_name}?",
-        "type": "question",
         "image_required": true,
         "params": [
             "class_name"
@@ -115,7 +86,6 @@
         "functions": [
             {
                 "name": "heatmap",
-                "description": "Analyzing the difference between the image and {class_name}...",
                 "args": {
                     "image": "image",
                     "class_name": "concept_name"
@@ -128,7 +98,6 @@
     },
     {
         "title": "Can you tell me the differences between {first_concept} and {second_concept}?",
-        "type": "question",
         "image_required": false,
         "params": [
             "first_concept",
@@ -137,7 +106,6 @@
         "functions": [
             {
                 "name": "heatmap_class_difference",
-                "description": "Analyzing the difference between {first_concept} and {second_concept}...",
                 "args": {
                     "first_concept": "concept1_name",
                     "second_concept": "concept2_name"
@@ -147,8 +115,6 @@
     },
     {
         "title": "Why is this a {first_concept}, but not {second_concept}?",
-        "type": "question",
-        
         "image_required": true,
         "params": [
             "first_concept",
@@ -157,7 +123,6 @@
         "functions": [
             {
                 "name": "heatmap_class_difference",
-                "description": "Analyzing the difference between {first_concept} and {second_concept}...",
                 "args": {
                     "first_concept": "concept1_name",
                     "second_concept": "concept2_name",
@@ -171,7 +136,6 @@
     },
     {
         "title": "This is a {class_name}",
-        "type": "training",
         "image_required": true,
         "params": [
             "class_name"
@@ -179,7 +143,6 @@
         "functions": [
             {
                 "name": "add_examples",
-                "description": "Adding examples of {class_name}...",
                 "args": {
                     "images": "images",
                     "class_name": "concept_name"
@@ -187,192 +150,19 @@
             },
             {
                 "name": "train_concepts",
-                "description": "Training the model with the new concept {class_name}...",
                 "args": {
                     "class_name": "concepts"
                 }
-            }
-        ]
-    },
-    
-    {
-        "title": "This is a {child_class_name}, a type of {parent_class_name}",
-        "type": "training",
-        "image_required": true,
-        "params": [
-            "child_class_name",
-            "parent_class_name"
-        ],
-        "functions": [
-            {
-                "name": "add_hyponym",
-                "description": "Adding a hyponym relationship between {child_class_name} and {parent_class_name}...",
-                "args": {
-                    "child_class_name": "child_name",
-                    "parent_class_name": "parent_name"
-                }
-            },
-            {
-                "name": "add_examples",
-                "description": "Adding examples of {child_class_name}...",
-                "args": {
-                    "images": "images",
-                    "child_class_name": "concept_name"
-                }
-            },
-            {
-                "name": "train_concepts",
-                "type": "training",
-                "description": "Training the model with the new concept {child_class_name} and {parent_class_name}...",
-                "args": {
-                    "child_class_name": "concepts",
-                    "parent_class_name": "concepts"
-                }
-            }
-        ]
-    },
-    {
-        "title": "There are {part_name}. The {class_name} has a components of {part_name}",
-        "type": "training",
-        "image_required": true,
-        "params": [
-            "part_name",
-            "class_name"
-        ],
-        "functions": [
-            {
-                "name": "add_examples",
-                "description": "Adding examples of {part_name}...",
-                "args": {
-                    "images": "images",
-                    "part_name": "concept_name"
-                }
-            },
-            {
-                "name": "add_component_concept",
-                "description": "Adding a component concept relationship between {part_name} and {class_name}...",
-                "args": {
-                    "part_name": "component_concept_name",
-                    "class_name": "concept_name"
-                }
-            },
-            {
-                "name": "train_concepts",
-                "description": "Training the model with the new concept {part_name}...",
-                "args": {
-                    "part_name": "concepts",
-                    "class_name": "concepts"
-                }
-            }
-        ]
-    },
-    {
-        "title": "This is a {part_name}. {first_concept} has {part_name}, but {second_concept} does not.",
-        "type": "training",
-        "image_required": true,
-        "params": [
-            "part_name",
-            "first_concept",
-            "second_concept"
-        ],
-        "functions": [
-            {
-                "name": "add_examples",
-                "description": "Adding examples of {part_name}...",
-                "args": {
-                    "images": "images",
-                    "part_name": "concept_name"
-                }
-            },
-            {
-                "name": "add_component_concept",
-                "description": "Adding a component concept relationship between {part_name} and {first_concept}...",
-                "args": {
-                    "part_name": "component_concept_name",
-                    "first_concept": "concept_name"
-                }
-            },
-            {
-                "name": "add_concept_negatives",
-                "description": "Adding negative examples of {part_name} to {second_concept}...",
-                "args": {
-                    "images": "images",
-                    "second_concept": "concept_name"
-                }
-            },
-            {
-                "name": "train_concepts",
-                "description": "Training the model with the new concept {part_name}...",
-                "args": {
-                    "first_concept": "concepts",
-                    "second_concept": "concepts",
-                    "part_name": "concepts"
-                }
-            }
-        ]
-    },
-    {
-        "title": "Show me the current knowledge base",
-        "image_required": false,
-        "params": [],
-        "functions": [
-            {
-                "name": "get_concept_kb",
-                "description": "Rendering the current knowledge base...",
-                "args": {}
-            }
-        ]
-    },
-    {
-        "title": "Show me the checkpoints history",
-        "image_required": false,
-        "params": [],
-        "functions": [
-            {
-                "name": "get_checkpoint_list",
-                "description": "Rendering the checkpoints history...",
-                "args": {}
-            }
-        ]
-    },
-    {
-        "title": "Revert to a previous checkpoint",
-        "image_required": false,
-        "params": [
-            "checkpoint_id"
-        ],
-        "functions": [
-            {
-                "name": "revert_to_checkpoint",
-                "description": "Reverting to a previous checkpoint...",
-                "args": {
-                    "checkpoint_id": "checkpoint_id"
-                }
-            }
-        ]
-    },
-    {
-        "title": "Undo the last action",
-        "type": "training",
-        "image_required": false,
-        "params": [],
-        "functions": [
-            {
-                "name": "undo_concept_kb",
-                "description": "Undoing the last action...",
-                "args": {}
             }
         ]
     },
     {
         "title": "Reset the backend from scratch",
-        "type": "training",
         "image_required": false,
         "params": [],
         "functions": [
             {
                 "name": "reset_kb",
-                "description": "Resetting the backend from scratch...",
                 "args": {},
                 "extra_args": {
                     "clear_all": "true"
@@ -382,16 +172,94 @@
     },
     {
         "title": "Reset the backend from checkpoint",
-        "type": "training",
         "image_required": false,
         "params": [],
         "functions": [
             {
                 "name": "reset_kb",
-                "description": "Resetting the backend from checkpoint...",
                 "args": {},
                 "extra_args": {
                     "clear_all": "false"
+                }
+            }
+        ]
+    },
+   
+    {
+        "title": "This is a {child_class_name}, a type of {parent_class_name}",
+        "image_required": true,
+        "params": [
+            "child_class_name",
+            "parent_class_name"
+        ],
+        "functions": [
+            {
+                "name": "add_hyponym",
+                "args": {
+                    "child_class_name": "child_name",
+                    "parent_class_name": "parent_name"
+                }
+            },
+            {
+                "name": "add_examples",
+                "args": {
+                    "images": "images",
+                    "child_class_name": "concept_name"
+                }
+            },
+            {
+                "name": "add_examples",
+                "args": {
+                    "images": "images",
+                    "parent_class_name": "concept_name"
+                }
+            },
+            {
+                "name": "train_concepts",
+                "args": {
+                    "child_class_name": "concepts",
+                    "parent_class_name": "concepts"
+                }
+            }
+        ]
+    },
+    {
+        "title": "This is a {part}. {first_concept} has {part_name}, but {second_concept} does not.",
+        "image_required": true,
+        "params": [
+            "part",
+            "first_concept",
+            "second_concept"
+        ],
+        "functions": [
+            {
+                "name": "add_component_concept",
+                "args": {
+                    "part": "component_concept_name",
+                    "first_concept": "concept_name"
+                }
+            },
+            {
+                "name": "add_examples",
+                "args": {
+                    "images": "images",
+                    "part_name": "component_concept_name"
+                }
+            },
+            {
+                "name": "add_concept_negatives",
+                "args": {
+                    "images": "images",
+                    "part_name": "component_concept_name",
+                    "second_concept": "concept_name"
+                }
+            },
+            {
+                "name": "train_concepts",
+                "args": {
+                    "first_concept": "concepts",
+                    "second_concept": "concepts",
+                    "part_name": "concepts"
                 }
             }
         ]
