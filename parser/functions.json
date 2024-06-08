@@ -254,7 +254,7 @@
                 "description": "Adding examples of {part}...",
                 "args": {
                     "images": "images",
-                    "part": "component_concept_name"
+                    "part": "concept_name"
                 }
             },
             {
@@ -262,7 +262,6 @@
                 "description": "Adding negative examples of {part}...",
                 "args": {
                     "images": "images",
-                    "part": "component_concept_name",
                     "second_concept": "concept_name"
                 }
             },

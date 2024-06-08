@@ -1,0 +1,9 @@
+{
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "always",
+        "editor.lightbulb.enabled": "always"
+    },
+    "python.analysis.extraPaths": [
+        "./ecole_mo9_demo/src"
+    ]
+}
