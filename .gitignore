@@ -13,3 +13,5 @@ cache/**
 image_dir/*
 conceptKB_ckpt/*
 tensor_dir/*
+*/image-backend-mock/*
+image-backend/feature_cache/*
