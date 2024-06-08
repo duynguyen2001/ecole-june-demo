@@ -5,7 +5,7 @@ sys.path.append("/shared/nas2/knguye71/ecole-june-demo/ecole_mo9_demo/src")
 from controller import Controller
 from feature_extraction.trained_attrs import N_ATTRS_DINO
 from kb_ops import ConceptKBTrainer, ConceptKBPredictor
-from model.concept import ConceptKB, ConceptKBConfig, ConceptExample
+from model.concept import ConceptKB, ConceptKBConfig, ConceptExample, Concept
 
 # from typing import Union, Literal
 # from llm import LLMClient
@@ -24,6 +24,7 @@ import os
 import sys
 import gc
 from PIL import Image
+import logging
 # import torch.nn as nn
 # import numpy as np
 # from rembg import remove
@@ -32,12 +33,13 @@ from PIL import Image
 # import concurrent.futures
 
 # logger = logging.getLogger("uvicorn.error")
-DEFAULT_CKPT = os.environ.get(
-    "DEFAULT_CKPT",
-    "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_03-00:42:32-dd87rspm-airplanes_v2-pp_fj/concept_kb_epoch_50.pt",
-)
+# DEFAULT_CKPT = os.environ.get(
+#     "DEFAULT_CKPT",
+#     "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_05-20:23:53-yd491eo3-all_planes_and_guns-infer_localize/concept_kb_epoch_50.pt",
+# )
+DEFAULT_CKPT = "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_06-23:31:12-8ckp59v8-all_planes_and_guns/concept_kb_epoch_50.pt"
 FEATURE_CACHE_DIR = os.environ.get("FEATURE_CACHE_DIR", "./feature_cache/")
-
+logger = logging.getLogger("uvicorn.error")
 class ExtendedController(Controller):
 
     def predict_concept(
@@ -123,6 +125,37 @@ class ExtendedController(Controller):
         currentkb.to("cpu")
         return currentkb
 
+    def train_concepts(self, concept_names: list[str], **train_concept_kwargs):
+        for concept in self.get_markov_blanket(concept_names):
+            print(f"Training concept: {concept.name}")
+            self.train_concept(concept.name, **train_concept_kwargs)
+        currentkb = self.concept_kb
+        currentkb.to("cpu")
+        print("Training complete.")
+        print("current_cuda_device", torch.cuda.current_device(), torch.cuda.get_device_name())
+        print("currentkb", currentkb)
+        return currentkb
+
+    def add_examples(self, examples: list[ConceptExample], concept_name: str = None, concept: Concept = None):
+        if not (bool(concept_name is None) ^ bool(concept is None)):
+            raise ValueError('Exactly one of concept_name or concept must be provided.')
+
+        if concept is None:
+            concept = self.retrieve_concept(concept_name)
+
+        image_paths = {ex.image_path for ex in concept.examples}
+
+        for example in examples:
+            if not example.concept_name: # Ensure concept name is set
+                example.concept_name = concept.name
+
+            if example.image_path not in image_paths: # Ensure no duplicate examples for this concept
+                concept.examples.append(example)
+                
+        concept_kb = self.concept_kb
+        concept_kb.to("cpu")
+        return concept_kb
+    
     def add_concept_negatives(self, concept_name: str, negatives: list[ConceptExample]):
         assert all(
             negative.is_negative for negative in negatives
@@ -612,7 +645,7 @@ if __name__ == "__main__":
     from image_processing import build_localizer_and_segmenter
 
     img_path = "/shared/nas2/knguye71/ecole-june-demo/samples/DemoJune2024-2/cargo_jet/000001.jpg"
-    ckpt_path = "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_05_30-11:30:28-rafd2xjd-no_biplane_no_cargo_jet/concept_kb_epoch_50.pt"
+    ckpt_path = "/shared/nas2/knguye71/ecole-june-demo/conceptKB_ckpt/05b09a5e2bdbc93d04059ecf2741478f0e01df72c8f9f88c2dd1ef0084bfc90f/concept_kb_epoch_1717755420.4449189.pt"
 
     # %%
     kb = ConceptKB.load(ckpt_path)
@@ -636,4 +669,7 @@ if __name__ == "__main__":
 
     result_2
 
+# %%
+    for concept in new_kb.concepts:
+        print(concept, concept.predictor.device)
 # %%

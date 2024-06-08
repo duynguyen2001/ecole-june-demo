@@ -8,7 +8,7 @@ import gc
 import sys
 from multiprocessing import Process, Queue
 import multiprocessing
-from ExtendedClasses import ExtendedController, DEFAULT_CKPT, ConceptKBFeaturePipeline
+from ExtendedClasses import ExtendedController, DEFAULT_CKPT, ConceptKBFeaturePipeline, ConceptExample
 import logging
 import PIL
 from PIL import Image
@@ -396,7 +396,7 @@ class AgentManager:
         elif user_id in self.checkpoint_path_dict:
             return ConceptKB.load(self.checkpoint_path_dict[user_id][-1])
         else:
-            return None
+            return ConceptKB.load(DEFAULT_CKPT)
 
     def get_concept_kb(self, user_id: str, agent):
 
@@ -479,7 +479,6 @@ class AgentManager:
                 torch.cuda.empty_cache()
 
     def wrapper_user_id_save(self, user_id: str, func, *args, **kwargs):
-
         agent_key = self.get_next_agent_key()
         concept_kb = None
         try:
@@ -491,6 +490,7 @@ class AgentManager:
             self.agents[agent_key].call("controller", "load_kb", concept_kb)
 
             # run and return result
+
             concept_kb = self.agents[agent_key].call("controller", func, *args, **kwargs)
             self.users_concept_kb[user_id] = concept_kb
             self.save_concept_kb(user_id)
@@ -499,6 +499,9 @@ class AgentManager:
 
             return concept_kb
         except Exception as e:
+            import traceback
+            import sys
+            logger.error(traceback.format_exc())
             raise Exception(f"Error in wrapper_user_id_save: {str(e)}")
         finally:
             # run this block to release memory
@@ -527,15 +530,14 @@ class AgentManager:
         )
         return result
         # return convert_to_serializable(result)
-        
-    
+
     def train_concepts(self, user_id: str, concept_names: list[str], **train_concept_kwargs):
+        print("train_concepts", concept_names)
+        print()
         result = self.wrapper_user_id_save(
             user_id, "train_concepts", concept_names, **train_concept_kwargs
         )
         return result
-    
-    
 
     def predict_hierarchical(
         self,
@@ -596,15 +598,18 @@ class AgentManager:
             return {"status": "success"}
         # return convert_to_serializable(result)
 
-    def add_concept_negatives(self, user_id: str, concept_name: str, negatives: list[PIL.Image.Image], streaming: bool = False):
+    def add_concept_negatives(self, user_id: str, images: list[PIL.Image.Image], concept_name: str,  streaming: bool = False):
         time_start = time.time()
-        concept_examples = self._loc_and_seg_multiple_images(negatives, concept_name)
+        concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
+        for example in concept_examples:
+            example.is_negative = True
         result = self.wrapper_user_id_save(
             user_id, "add_concept_negatives", concept_name, concept_examples, 
         )
         if streaming:
             yield f"status: Add negative examples successfully time: {time.time() - time_start}\n\n"
-            
+            yield f"result: {len(concept_examples)} negative examples added to concept {concept_name}\n\n"
+
         else:
             return result
 
@@ -672,7 +677,7 @@ class AgentManager:
                 new_id + ".pkl",
             )
             with open(path, "wb") as f:
-                pickle.dump(loc_seg_output, f)
+                pickle.dump(loc_seg_output.cpu(detach= True), f)
             logger.info(str("Loc and seg single image time: " + str(time.time() - time_start)))
             return ConceptExample(
                 concept_name=concept_name,
@@ -687,7 +692,6 @@ class AgentManager:
     def _loc_and_seg_multiple_images(self, images: list[PIL.Image.Image], concept_name: str):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             results = list(executor.map(self._loc_and_seg_single_image, images, [concept_name] * len(images)))
-
         return results
 
     def _train_concept(
@@ -716,33 +720,43 @@ class AgentManager:
         else:
             self._train_concept(user_id, concept_name, concept_examples, previous_concept, streaming=streaming)
 
-
     def add_examples(self, user_id:str, images: list[PIL.Image.Image], concept_name: str = None, streaming=False):
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
-        result = self.wrapper_user_id_save(
-            user_id, "add_examples", concept_examples, concept_name
+
+        print(f"concept_examples: {concept_examples}")
+        print(f"concept_name: {concept_name}")
+
+        self.wrapper_user_id_save(
+            user_id,
+            "add_examples",
+            examples=concept_examples,
+            concept_name=concept_name,
         )
+
         if streaming:
             yield f"status: Add examples successfully time: {time.time() - time_start}"
+            yield f"result: {len(concept_examples)} examples added to concept {concept_name}\n\n"
         else:
             return {"status": "success"}
 
     def train_concepts(self, user_id:str, concept_names: list[str], streaming: bool = False, **train_concept_kwargs):
         time_start = time.time()
+        logger.info(f"\n\nconcept_names: {concept_names}\n\n")
         if streaming:
             yield f"status: Training {len(concept_names)} concepts\n\n"
-            result = self.wrapper_user_id_save(
+            self.wrapper_user_id_save(
                 user_id, "train_concepts", concept_names, **train_concept_kwargs
             )
             yield f"status: Training completed\n\n"
             yield f"status: Total time for training {len(concept_names)} concepts: {time.time() - time_start}"
+            yield f"result: Training succcessfully with {len(concept_names)} concepts\n\n"
         else:
             result = self.wrapper_user_id_save(
                 user_id, "train_concepts", concept_names, **train_concept_kwargs
             )
             return {"status": "success"}
-        
+
     def get_zs_attributes(self, user_id: str, concept_name: str):
         return self.wrapper_user_id_no_save(user_id, "get_zs_attributes", concept_name)
 
@@ -928,7 +942,7 @@ async def predict_from_subtree(
     user_id: str,  # Required field
     root_concept_name: str,  # Required field
     image: UploadFile = File(...),  # Required file upload,
-    unk_threshold: str = "0.1",
+    unk_threshold: str = "0.7",
     streaming: str = "false",
 ):  
     if streaming == "true":
@@ -979,7 +993,7 @@ async def predict_from_subtree(
 async def predict_hierarchical(
     user_id: str,  # Required field
     image: UploadFile = File(...),  # Required file upload,
-    unk_threshold: str = "0.1",
+    unk_threshold: str = "0.7",
     include_component_concepts: str = "False",
     streaming: str = "false",
 ):
@@ -1037,7 +1051,7 @@ async def predict_hierarchical(
 async def predict_root_concept(
     user_id: str,  # Required field
     image: UploadFile = File(...),  # Required file upload,
-    unk_threshold: str = "0.1",
+    unk_threshold: str = "0.7",
     streaming: str = "false",
 ):
     if streaming == "true":
@@ -1099,17 +1113,10 @@ async def is_concept_in_image(
             # Convert to PIL Image
             yield "status: Checking if concept in image..."
             try:
-                result = app.state.agentmanager.is_concept_in_image(
-                    user_id, img, concept_name, float(unk_threshold)
-                )
-                if concept_name in result.concept_names:
-                    heatmap = app.state.agentmanager.heatmap(user_id, img, concept_name)
+                heatmap = app.state.agentmanager.heatmap(user_id, img, concept_name)
                 logger.info(str("Is concept in image time: " + str(time.time() - time_start)))
-                async for msg in streaming_is_concept_in_image(
-                    result, concept_name, heatmap
-                ):
+                for msg in streaming_heatmap(heatmap, concept_name):
                     yield msg
-                # yield f"result: {json.dumps(result)}"
             except Exception as e:
                 import traceback
                 import sys
@@ -1344,7 +1351,7 @@ async def reset_kb(
                 else:
                     app.state.agentmanager.reset_kb(user_id, False)
                 logger.info(str("Reset concept KB time: " + str(time.time() - time_start)))
-                yield "status: Reset successful"
+                yield f"result: Knowledge base successfully reseted {'from scratch' if clear_all else 'default checkpoint'}\n\n"
             except Exception as e:
                 import traceback
                 import sys
@@ -1467,15 +1474,17 @@ async def add_examples(
     images: List[UploadFile] = File(...),  # Required field
     streaming: str = "false",
 ):
+
+    images = [Image.open(image.file).convert("RGB") for image in images]
     if streaming == "true":
-        async def streamer(user_id, concept_name, images):
+        async def streamer(user_id, concept_name, imgs):
             yield "status: Adding examples..."
             try:
-                images = [Image.open(image.file).convert("RGB") for image in images]
                 result = app.state.agentmanager.add_examples(
-                    user_id, concept_name, images, streaming=streaming
+                    user_id, imgs, concept_name, streaming=streaming
                 )
-                yield f"result: {result}"
+                for msg in result:
+                    yield msg
             except Exception as e:
                 import traceback
                 import sys
@@ -1501,25 +1510,26 @@ async def add_examples(
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
-        
+
 
 @app.post("/add_concept_negatives", tags=["kb_ops"])
 async def add_concept_negatives(
     user_id: str,  # Required field
     concept_name: str ,  # Required field
-    negatives: List[UploadFile] = File(...),  # Required field
+    images: List[UploadFile] = File(...),  # Required field
     streaming: str = "false",
 ):
+
+    negatives = [Image.open(negative.file).convert("RGB") for negative in images]
     if streaming == "true":
-        async def streamer(user_id, concept_name, negatives):
+        async def streamer(user_id, concept_name, imgs):
             yield "status: Adding concept negatives..."
             try:
-                negatives = [Image.open(negative.file).convert("RGB") for negative in negatives]
                 result = app.state.agentmanager.add_concept_negatives(
-                    user_id, concept_name, negatives, 
-                    streaming=streaming
+                    user_id, imgs, concept_name, streaming=streaming
                 )
-                yield f"result: {result}"
+                for msg in result:
+                    yield msg
             except Exception as e:
                 import traceback
                 import sys
@@ -1535,7 +1545,7 @@ async def add_concept_negatives(
         try:
             negatives = [Image.open(negative.file).convert("RGB") for negative in negatives]
             result = app.state.agentmanager.add_concept_negatives(
-                user_id, concept_name, negatives
+                user_id, negatives, concept_name,
             )
             return JSONResponse(content=result)
         except Exception as e:
@@ -1591,22 +1601,20 @@ async def train_concept(
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
-        
+
 @app.post("/train_concepts", tags=["train"])
 async def train_concepts(
     user_id: str,  # Required field
-    concepts: List[str] = Form(...),  # Required field
+    concepts: str,
     streaming: str = "false",
 ):
     if streaming == "true":
-        async def streamer(user_id, concepts):
+        async def streamer(user_id, cncpts):
             yield "status: \nTraining concepts...\n"
             try:
                 time_start = time.time()
-                async for res in app.state.agentmanager.train_concepts(
-                    user_id, concepts
-                ):
-                    yield f"status: {res}"
+                for res in app.state.agentmanager.train_concepts(user_id, cncpts):
+                    yield res
                 logger.info(str("Train concepts time: " + str(time.time() - time_start)))
             except Exception as e:
                 import traceback
@@ -1616,7 +1624,7 @@ async def train_concepts(
                 yield f"error: {str(e)}"
 
         return StreamingResponse(
-            streamer(user_id, concepts),
+            streamer(user_id, concepts.split(", ")),
             media_type="text/event-stream",
         )
     else:
@@ -1754,7 +1762,7 @@ def upload_tensor(tensor: UploadFile = File(...)):
 
 @app.get("/tensor/{uid}")
 def get_tensor(uid):
-    filename = f"{uid}.pt"
+    filename = f"{uid}.json"
     return FileResponse(
         os.path.join(TENSOR_DIR, filename), media_type="application/octet-stream"
     )

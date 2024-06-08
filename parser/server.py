@@ -42,7 +42,6 @@ async def generate_text(request: Request) -> None:
     data = await request.json()
     prompt = data["inputs"]
     userId = data["userId"] if "userId" in data else "default_user"
-    print(f"\n\n\n\nUser {userId}\n\n\n\n")
 
     conversations = strip_tokens(prompt)
 
@@ -66,9 +65,10 @@ async def generate_text(request: Request) -> None:
             )
             return
         elif template_title is not None:
-            res_str = f"Template matched: {template_title}\nParameters extracted: {params}\n\n"
+            # res_str = f"Template matched: {template_title}\nParameters extracted: {params}\n\n"
+            res_str = "Processing...\n\n"
         else:
-            res_str = "No template matched." 
+            # res_str = "No template matched." 
             llm_res = generator(prompt, max_length=50, num_return_sequences=1)
             res_str += llm_res[0]["generated_text"]
 

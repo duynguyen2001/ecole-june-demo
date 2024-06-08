@@ -3,7 +3,9 @@ import uuid
 import PIL
 import os
 import PIL.Image
+import numpy as np
 import torch
+import base64
 from textblob import TextBlob
 # from ..ecole_mo9_demo.src.model.concept import ConceptExample, Concept, ConceptKB
 from model.concept import ConceptExample, Concept, ConceptKB
@@ -22,8 +24,9 @@ LIST_DINO_ATTR = list(DINO_INDEX_TO_ATTR.values())
 def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 def correct_grammar(sentence):
-    blob = TextBlob(sentence)
-    return str(blob.correct())
+    return sentence
+    # blob = TextBlob(sentence)
+    # return str(blob.correct())
 
 
 def barchart_md_template(
@@ -73,20 +76,38 @@ def upload_image_and_return_id(image: PIL.Image.Image):
 def upload_binary_tensor_and_return_id(tensor: torch.Tensor):
     # store image in local storage
     tensor_id = str(uuid.uuid4())
-    tensor_path = os.path.join(TENSOR_DIR, f'{tensor_id}.pt')
-    os.makedirs(TENSOR_DIR, exist_ok=True)
-    torch.save(tensor, tensor_path)
-    return tensor_id
+    # convert tensor to base64 string
+    # Flatten the boolean tensor to a 1D array
+    flattened_data = np.ravel(tensor).astype(np.uint8)
 
-def image_with_mask_md_template(image: PIL.Image.Image, mask: torch.Tensor, general_attributes: list[dict] = None):
+    # Convert the flattened data to bytes
+    byte_data = flattened_data.tobytes()
+
+    # Encode the byte data to a base64 string
+    base64_data = base64.b64encode(byte_data).decode('utf-8')
+
+    # Get the shape of the tensor
+    shape = list(tensor.shape)
+
+    # Create the EncodedTensor object
+    encoded_tensor = {"dtype": "torch.bool", "data": base64_data, "shape": shape}
+    tensor_path = os.path.join(TENSOR_DIR, f'{tensor_id}.json')
+    os.makedirs(TENSOR_DIR, exist_ok=True)
+    with open(tensor_path, 'w') as f:
+        json.dump(encoded_tensor, f)
+    return tensor_id, list(tensor.shape)
+
+def image_with_mask_md_template(image: PIL.Image.Image, mask: torch.Tensor, general_attributes: list[dict] = [], general_attributes_image: list[PIL.Image.Image] = []):
     image_id = upload_image_and_return_id(image)
-    mask_id = upload_binary_tensor_and_return_id(mask)
+    mask_id, shape = upload_binary_tensor_and_return_id(mask)
     return f"""
 ```image-with-mask
 {{
   "image": "{image_id}",
   "mask": "{mask_id}",
-  "general_attributes": {general_attributes}
+  "shape": {shape},
+  "general_attributes": {general_attributes},
+  "general_attributes_for_image": {general_attributes_image}
 }}
 ```
 """
@@ -95,6 +116,7 @@ def image_with_mask_md_template(image: PIL.Image.Image, mask: torch.Tensor, gene
 def render_prediction_result(
     output: PredictOutput, rev_dict: dict = None, top_k: int = 5
 ):
+    nodes = []
     rev_list = [rev_dict[name] for name in output['concept_names']] if rev_dict else None
     predicted_label = output.predicted_label
     if predicted_label == 'unknown':
@@ -103,12 +125,18 @@ def render_prediction_result(
     predicted_concept_outputs = output.predicted_concept_outputs
     if predicted_concept_outputs and predicted_label != 'unknown':
         mask_scores = predicted_concept_outputs.trained_attr_region_scores.tolist()
+        img_trained_attr_scores = predicted_concept_outputs.trained_attr_img_scores.tolist()
+        
 
     predicted_concept_components_to_scores = output.predicted_concept_components_to_scores
+    logger.info(predicted_concept_components_to_scores)
+    component_concept_scores = None
+    component_concept_names = None
     if predicted_concept_components_to_scores:
         component_concept_scores = predicted_concept_components_to_scores.values()
         component_concept_names = predicted_concept_components_to_scores.keys()
     predicted_concept_components_heatmaps = output.predicted_concept_compoents_heatmaps
+    component_concept_heatmaps = None
     if predicted_concept_components_heatmaps:
         component_concept_heatmaps = list(predicted_concept_components_heatmaps.values())
 
@@ -126,19 +154,22 @@ def render_prediction_result(
 
             region_general_attributes.append(region_general_attribute_mask)
 
-    return f"""
-
-{image_with_mask_md_template(segmentations['input_image'], masks, general_attributes = region_general_attributes )}
-{correct_grammar(f'result: There is a  "{predicted_label}" in the image\n\n') if predicted_label and predicted_label != 'unknown' else 'I do not know what object is in the image\n\n'}
-
-### Concept Scores
-{barchart_md_template(output['predictors_scores'].tolist(), output['concept_names'], 'Concept Scores', 'Scores', 'Concepts', 0.1, rev_list, sort=True, sigmoided=True)}
-
-### Component Concepts
-{barchart_md_template(component_concept_scores, component_concept_names, 'Component Concepts Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True) if component_concept_scores else 'No component concepts found'}
-{streaming_images(component_concept_heatmaps, list(component_concept_names))}
-
-"""
+    if img_trained_attr_scores:
+        img_trained_attr_scores = dict(zip(attr_names, img_trained_attr_scores))
+        img_trained_attr_scores = dict(sorted(
+            img_trained_attr_scores.items(), key=lambda x: x[1], reverse=True
+        )[:top_k])
+    nodes.append(image_with_mask_md_template(segmentations['input_image'], masks, general_attributes = region_general_attributes, general_attributes_image=img_trained_attr_scores ) if segmentations and segmentations['input_image'] and region_general_attributes and len(masks) and img_trained_attr_scores else '')
+    nodes.append(correct_grammar(f'There is a  "{predicted_label}" in the image\n\n') if predicted_label and predicted_label != 'unknown' else 'I do not know what object is in the image\n\n')
+    nodes.append("### Concept Scores")
+    nodes.append(barchart_md_template(output['predictors_scores'].tolist(), output['concept_names'], 'Concept Scores', 'Scores', 'Concepts', 0.1, rev_list, sort=True, sigmoided=True))
+    nodes.append("### Component Concepts")
+    if component_concept_heatmaps:
+        # nodes.append(barchart_md_template(component_concept_scores, component_concept_names, 'Component Concepts Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True) )
+        nodes.append(streaming_images(component_concept_heatmaps, list(component_concept_names)))
+    else:
+        nodes.append('No component concepts found')
+    return nodes
 
 
 async def streaming_hierachical_predict_result(output: dict, sigmoided: bool = True, streaming_subclass: bool = False):
@@ -176,15 +207,11 @@ async def streaming_hierachical_predict_result(output: dict, sigmoided: bool = T
                 )
             best_node = sorted_data[0]
             nodes.append(
-                f"""result: 
+                f"""result: ###{best_node[0]}</h3>\n\n""")
+            nodes.extend([f"result: {res}"  for res in render_prediction_result(pred, rev_dict) if res])
     
-<h3>{best_node[0]}</h3>
 
-{render_prediction_result(pred, rev_dict)}
-"""
-            )
-
-        yield "result: " + decision_tree_md_template(decision_tree)
+        yield "result: " + decision_tree_md_template(decision_tree)+ "\n\n"
         # stream nodes
         for node in nodes:
             yield node
@@ -252,7 +279,7 @@ def streaming_heatmap(
     elif only_score_decreasing_regions:
         yield f'result: The regions that are less likely to be a {concept} are highlighted in the image.\n\n'
     else: # Visualize all regions
-        yield f'result: The regions that are more likely to be a {concept} are highlighted in the image with a red color. Whereas, the regions that are less likely to be a {concept} are highlighted in the image with a blue color.\n\n'
+        yield f'result: The regions that are more likely to be a {concept} are highlighted in the image with a yellow color. Whereas, the regions that are less likely to be a {concept} are highlighted in the image with a blue color.\n\n'
         
     yield streaming_images([heatmap], names=[concept + " predictor"])
 
@@ -278,6 +305,12 @@ def streaming_diff_images(output: dict):
     else:
         if predicted_label1 == predicted_label2:
             yield f"""result: I predict that the object in the first image and the object in the second image are both a {predicted_label1}.\n\n"""
+            yield f"""result: # Image Comparison\n\n"""
+            yield f"""result: These are the most distinctive regions of the object in the first image and the second image.\n\n"""
+            yield streaming_images(
+                [c1_minus_c2_image1, c2_minus_c1_image2],
+                names=[predicted_label1 + " predictor", predicted_label2 + " predictor"],
+            )
         else:
             yield f"""result: I predict that the object in the first image is a {predicted_label1} and the object in the second image is a {predicted_label2}.\n\n"""
             yield f"""result: # Image Comparison\n\n"""
@@ -298,11 +331,13 @@ def streaming_diff_images(output: dict):
             yield f"""result: # Concept Prediction\n\n"""
             yield f"""result: ## First image\n\n"""
             yield f"""result: The predicted object in the first image is a {predicted_label1}\n\n""" if predicted_label1 != 'unknown' else 'result: I do not know what object is in the first image.\n\n'
-            yield f"""result: {render_prediction_result(concept1_prediction)}\n\n"""
+            for msg in render_prediction_result(concept1_prediction):
+                yield f"""result: {msg}\n\n"""
 
             yield f"""result: ## Second image\n\n"""
             yield f"""result: The predicted object in the second image is a {predicted_label2}\n\n""" if predicted_label2 != 'unknown' else 'result: I do not know what object is in the second image.\n\n'
-            yield f"""result: {render_prediction_result(concept2_prediction)}\n\n"""
+            for msg in render_prediction_result(concept2_prediction):
+                yield f"""result: {msg}\n\n"""
 
 
 async def streaming_is_concept_in_image(result, concept_name: str, heatmap: PIL.Image.Image):
@@ -321,9 +356,11 @@ async def streaming_is_concept_in_image(result, concept_name: str, heatmap: PIL.
                 if heatmap:
                     yield f"""result: The regions that are more likely to be a {concept_name} are highlighted in the image.\n\n"""
                     yield streaming_images([heatmap], names=[concept_name])
+                    
         else:
             yield f'result: No, the concept of {concept_name} is not in the image.\n\n'
     else:
         yield f'result: No, the concept of {concept_name} is not in the image.\n\n'
-
-    
+        
+    yield f"""result: # Concept Prediction\n\n"""
+    yield f"""result: {barchart_md_template(concept_scores.tolist(), concept_names, 'Concept Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True)}\n\n"""
