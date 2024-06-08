@@ -61,7 +61,8 @@ def convert_base64_to_upload_file(arg, base64_string):
     finally:
         # Clean up the temporary file
         os.remove(temp_file.name)
-
+def substitute_brackets(template, values):
+    return template.format(**values)
 
 async def _make_request(function_name, args, files, user_id= "default_user", extra_args = {}, callback = None):
     """
@@ -83,8 +84,9 @@ async def _make_request(function_name, args, files, user_id= "default_user", ext
     if extra_args:
         for arg in extra_args:
             args[arg] = extra_args[arg]
-    yield streaming_response_yield(f"Making a request to the image backend API with function {url}, args: {args}\n\n", counter)
+    # yield streaming_response_yield(f"Making a request to the image backend API with function {url}, args: {args}\n\n", counter)
     logger.info(f"Making a request to the image backend API with function {url}, args: {args}, images: {files}")
+    
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream("POST", url, params=args, files=files) as response:
@@ -136,8 +138,16 @@ async def make_requests(functions, params, images, user_id = "default_user", cal
                 image_upload_list.append(convert_base64_to_upload_file("image", images[0]))
             else:
                 arg_dict[arg_api_name] = params[arg]
-                
-        
+
+        if "concepts" in arg_dict:
+            arg_dict["concepts"] = ", ".join(arg_dict["concepts"])
+
+        description = function["description"]
+
+        if description:
+            yield streaming_response_yield(
+                substitute_brackets(description, params) + "\n\n", Counter()
+            )
 
         async for msg in _make_request(function_name, arg_dict, image_upload_list, user_id, extra_args, callback):
             yield msg
