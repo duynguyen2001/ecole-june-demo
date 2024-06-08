@@ -1,77 +1,33 @@
-from typing import List
-import json
+from typing import List, AsyncGenerator
 import httpx
-from utils import streaming_response_yield, streaming_response_end, Counter
+from utils import streaming_response_yield, streaming_response_end, convert_base64_to_upload_file, substitute_brackets
+from model.Counter import Counter
 import os
-import base64
-import io
-
-import base64
-import io
-import os
-import tempfile
-import mimetypes
 import logging
+
 logger = logging.getLogger("uvicorn.error")
 
+# Load the environment variables
 IMAGE_BACKEND_API = os.environ.get(
     "IMAGE_BACKEND_API", "http://blender12.cs.illinois.edu:16004"
 )
-def convert_base64_to_upload_file(arg, base64_string):
-    """
-    convert base64 image to upload file
-    For example, given the input string:
-    arg = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/4QBYRXhpZgAATU0AKgAAAAgAA1IBAAABAAEAAK4BAgAABAAEAAYIBAgAABAAEAAYUBAgAABAAEAAYYB"
+
+# 
 
 
-
-    Args:
-        arg (str): string to identify the image
-        base64_string (str): base64 image
-
-    Returns:
-        _type_:
-    """
-
-    # Extract the MIME type and the base64 part
-    if base64_string.startswith("data:"):
-        header, base64_data = base64_string.split(",", 1)
-        mime_type = header.split(":")[1].split(";")[0]
-    else:
-        mime_type = "application/octet-stream"
-        base64_data = base64_string
-
-    # Decode the base64 string
-    file_data = base64.b64decode(base64_data)
-
-    # Prepare a file-like object from the decoded data
-    file_like = io.BytesIO(file_data)
-
-    # Create a temporary file
-    temp_file = tempfile.NamedTemporaryFile(
-        delete=False, suffix=mimetypes.guess_extension(mime_type)
-    )
-    try:
-        # Write the decoded data to the temporary file
-        temp_file.write(file_data)
-        temp_file.close()
-
-        return (arg, (os.path.basename(temp_file.name), file_like, mime_type))
-
-    finally:
-        # Clean up the temporary file
-        os.remove(temp_file.name)
-def substitute_brackets(template, values):
-    return template.format(**values)
-
-async def _make_request(function_name, args, files, user_id= "default_user", extra_args = {}, callback = None):
+async def _make_request(function_name: str, args: dict[str, str], files: object, user_id: str= "default_user", extra_args: dict[str, str] = {}, callback = None) -> AsyncGenerator[str, None]:
     """
     Make a request to the image backend API.
 
-    Parameters:
-    function_name (str): The name of the function to execute on the image.
-    args (dict): The parameters extracted from the sentence.
-    files (list): The list of images to upload.
+    Args:
+        function_name (str): The name of the function to execute on the image.
+        args (dict): The arguments for the function.
+        files (object): The image files to upload.
+        user_id (str): The user ID.
+        extra_args (dict): The extra arguments for the function.
+        
+    Returns:
+        dict: The response from the image backend API.
     """
     url = f"{IMAGE_BACKEND_API}/{function_name}"
     counter = Counter()
@@ -88,7 +44,7 @@ async def _make_request(function_name, args, files, user_id= "default_user", ext
     logger.info(f"Making a request to the image backend API with function {url}, args: {args}, images: {files}")
     
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream("POST", url, params=args, files=files) as response:
             async for chunk in response.aiter_text():
                 if chunk.startswith("status: "):
@@ -103,7 +59,7 @@ async def _make_request(function_name, args, files, user_id= "default_user", ext
                 else:
                     yield streaming_response_yield(chunk, counter)
 
-async def make_requests(functions, params, images, user_id = "default_user", callback = None):
+async def make_requests(functions, params, images, user_id = "default_user", callback = None) -> AsyncGenerator[str, None]:
     """
     Make a request to the image backend API.
 

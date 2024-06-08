@@ -1,18 +1,18 @@
-import re
-from difflib import SequenceMatcher
+import base64
+import io
 import json
+import mimetypes
+import os
+import re
+import tempfile
+from difflib import SequenceMatcher
 from typing import Any
 
+from model.Counter import Counter
 
 START_TOKEN = "<|im_start|>"
 END_TOKEN = "<|im_end|>"
-class Counter:
-    def __init__(self):
-        self.count = 0
 
-    def increment(self):
-        self.count += 1
-        return self.count
 
 def clean_string(input_string: str) -> str:
     """
@@ -57,9 +57,21 @@ def streaming_response_yield(output_string, counter: Counter):
     )
 
 
-def streaming_response_end(output_string, counter: Counter):
+def streaming_response_end(output_string: str, counter: Counter) -> str:
+    """
+    Generate the end of the streaming response.
+
+    Args:
+        output_string (str): The output string.
+        counter (Counter): The counter object.
+
+    Returns:
+        str: The end of the streaming response.
+    """
     # auto increment index
     counter.increment()
+
+    # return the end of the streaming response
     return (
         "data: "
         + json.dumps(
@@ -81,7 +93,9 @@ def streaming_response_end(output_string, counter: Counter):
     )
 
 
-def strip_tokens(input_string, start_token=START_TOKEN, end_token=END_TOKEN):
+def strip_tokens(
+    input_string: str, start_token: str = START_TOKEN, end_token: str = END_TOKEN
+):
     """
     Strips the conversation inputs to list of strings.
     For instance, given the input string:
@@ -93,6 +107,14 @@ def strip_tokens(input_string, start_token=START_TOKEN, end_token=END_TOKEN):
         {"role": "bot", "prompt": "Hello"},
         {"role": "user", "prompt": "How are you?"}
     ]
+
+    Args:
+        input_string (str): The input string.
+        start_token (str, optional): The start token. Defaults to "<|start|>".
+        end_token (str, optional): The end token. Defaults to "<|end|>".
+
+    Returns:
+        list[dict]: The list of conversation inputs.
     """
 
     # split by start token
@@ -145,7 +167,17 @@ with open("/shared/nas2/knguye71/ecole-june-demo/parser/functions.json", "r") as
     templates = json.load(f)
 
 
-def similarity(a, b):
+def similarity(a: str, b: str) -> float:
+    """
+    Find the similarity between two strings.
+
+    Args:
+        a (str): The first string.
+        b (str): The second string.
+
+    Returns:
+        _type_: _description_
+    """
     return SequenceMatcher(None, a, b).ratio()
 
 
@@ -229,3 +261,63 @@ def extract_params_from_sentence_with_prompt(
         params[placeholder] = clean_string(extracted_value)
 
     return params
+
+
+def convert_base64_to_upload_file(
+    arg: str, base64_string: str
+) -> tuple[str, tuple[str, io.BytesIO, str]]:
+    """
+    convert base64 image to upload file, then output the file name, file-like object, and MIME type, along with the argument name.
+    For example, given the input string:
+
+    Args:
+        arg (str): The argument name.
+        base64_string (str): The base64 string.
+
+    Returns:
+        [tuple[str, tuple[str, io.BytesIO, str]]]: The argument name and the tuple of file name, file-like object, and MIME type.
+    """
+
+    # Extract the MIME type and the base64 part
+    if base64_string.startswith("data:"):
+        header, base64_data = base64_string.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0]
+    else:
+        mime_type = "application/octet-stream"
+        base64_data = base64_string
+
+    # Decode the base64 string
+    file_data = base64.b64decode(base64_data)
+
+    # Prepare a file-like object from the decoded data
+    file_like = io.BytesIO(file_data)
+
+    # Create a temporary file
+    temp_file = tempfile.NamedTemporaryFile(
+        delete=False, suffix=mimetypes.guess_extension(mime_type)
+    )
+    try:
+        # Write the decoded data to the temporary file
+        temp_file.write(file_data)
+        temp_file.close()
+
+        return (arg, (os.path.basename(temp_file.name), file_like, mime_type))
+
+    finally:
+        # Clean up the temporary file
+        os.remove(temp_file.name)
+
+
+def substitute_brackets(template: str, values: dict) -> str:
+    """
+    Substitute the placeholders in a template with the given values.
+
+    Args:
+        template (str): The template string.
+        values (dict): The dictionary of values to substitute.
+
+    Returns:
+        str: The template with the placeholders substituted with the values.
+    """
+    # Substitute the placeholders in the template with the values
+    return template.format(**values)

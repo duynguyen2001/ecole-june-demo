@@ -1,307 +1,153 @@
+# %%
+
 from dotenv import load_dotenv
 
 load_dotenv()
-
-import os
+# %%
 import base64
+import concurrent.futures
 import gc
+import logging
+import multiprocessing
+import os
+import pickle
 import sys
 from multiprocessing import Process, Queue
-import multiprocessing
-from ExtendedClasses import ExtendedController, DEFAULT_CKPT, ConceptKBFeaturePipeline, ConceptExample
-import logging
-import PIL
-from PIL import Image
+from typing import Any, List
+
+import PIL.Image
 import torch
-from typing import List, Dict, Union, Any
-import concurrent.futures
-import pickle
-from fastapi.responses import StreamingResponse, FileResponse
-import os
-import io
-from StreamingMethods import (
-    streaming_hierachical_predict_result,
-    streaming_diff_images,
-    streaming_heatmap,
-    streaming_heatmap_class_difference,
-    streaming_is_concept_in_image,
-)
+from ExtendedClasses import (DEFAULT_CKPT, ConceptExample,
+                             ConceptKBFeaturePipeline, ExtendedController)
+from fastapi.responses import FileResponse, StreamingResponse
+from PIL import Image
+from streaming_methods import (streaming_diff_images, streaming_heatmap,
+                               streaming_heatmap_class_difference,
+                               streaming_hierachical_predict_result,
+                               yield_nested_objects)
 
 logger = logging.getLogger("uvicorn.error")
 
-LOC_SEG_CONCEPT_DIR = os.environ.get("LOC_SEG_CONCEPT_DIR")
+LOC_SEG_CONCEPT_DIR = os.environ.get(
+    "LOC_SEG_CONCEPT_DIR", "/shared/nas2/knguye71/ecole-june-demo/cache/log_and_seg"
+)
 CACHE_DIR = os.environ.get(
     "CACHE_DIR", "/shared/nas2/knguye71/ecole-june-demo/cache/ckpt_dir"
 )
-IMAGE_DIR = os.environ.get("IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir")
-TENSOR_DIR = os.environ.get("TENSOR_DIR", "/shared/nas2/knguye71/ecole-june-demo/tensor_dir")
-CONCEPT_KB_CKPT = os.environ.get("CONCEPT_KB_CKPT", "/shared/nas2/knguye71/ecole-june-demo/conceptKB_ckpt")
+IMAGE_DIR = os.environ.get(
+    "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
+)
+TENSOR_DIR = os.environ.get(
+    "TENSOR_DIR", "/shared/nas2/knguye71/ecole-june-demo/tensor_dir"
+)
+CONCEPT_KB_CKPT = os.environ.get(
+    "CONCEPT_KB_CKPT", "/shared/nas2/knguye71/ecole-june-demo/conceptKB_ckpt"
+)
 
 if torch.cuda.is_available():
     num_gpus = torch.cuda.device_count()
     AGENT_GPU_LIST = list(range(num_gpus))
 else:
     RuntimeError("No GPU available. Please check your CUDA installation.")
+    AGENT_GPU_LIST = [0]
 
 
 # Set the multiprocessing start method to 'spawn'
-multiprocessing.set_start_method('spawn', force=True)
+multiprocessing.set_start_method("spawn", force=True)
 
 logger = logging.getLogger("uvicorn.error")
 logger.info(str("Starting server..."))
 
 # List available GPUs
-logger.info(str(f"GPUs available: {torch.cuda.device_count()}, current device: {torch.cuda.current_device()}"))
-
-sys.path.append("/shared/nas2/knguye71/ecole-backend/ods/src")
-from feature_extraction import (
-    build_sam,
-    build_feature_extractor,
+logger.info(
+    str(
+        f"GPUs available: {torch.cuda.device_count()}, current device: {torch.cuda.current_device()}"
+    )
 )
-from image_processing import build_localizer_and_segmenter
-from kb_ops.retrieve import CLIPConceptRetriever
-from model.concept import ConceptKB, ConceptExample, ConceptKBConfig
-from feature_extraction.trained_attrs import N_ATTRS_DINO
-import uuid
+
 import time
-import json
+import uuid
 from io import BytesIO
-def rle(x):
-    """
-    Perform run-length encoding on a boolean PyTorch tensor.
-    
-    Args:
-        tensor (torch.Tensor): A 1D boolean tensor to be encoded.
-        
-    Returns:
-        values (torch.Tensor): The unique values (0 or 1).
-        lengths (torch.Tensor): The lengths of the runs.
-    """
-    assert x.dim() == 1, "Input tensor must be a 1D tensor"
-    n = x.shape[0]
-    if n == 0:
-        return (
-            torch.tensor([], dtype=torch.int64),
-            torch.tensor([], dtype=torch.int64),
-            torch.tensor([], dtype=torch.bool),
-        )
 
-    # Find where the value changes
-    change_indices = (
-        torch.diff(
-            x,
-            prepend=torch.tensor([0], dtype=x.dtype),
-            append=torch.tensor([0], dtype=x.dtype),
-        )
-        .nonzero()
-        .flatten()
-    )
-
-    # Lengths of the runs
-    lengths = torch.diff(change_indices, prepend=torch.tensor([0])).to(
-        dtype=torch.int64
-    )
-
-    # Values of the runs
-    values = x[change_indices[:-1]]
-
-    return change_indices[:-1], lengths, values
-
-
-def convert_bool_tensor_to_byte_string(obj: torch.BoolTensor) -> str:
-    # Convert a torch.BoolTensor to a byte string
-    # Flatten the N-D tensor to 1D
-    if (obj.shape == torch.Size([1])):
-        return True if obj[0] == 1 else False
-
-    shape = obj.shape
-    flattened_tensor = torch.flatten(obj)
-    indices, lengths, values = rle(flattened_tensor)
-    return {
-        "type": "bool_tensor_rle",
-        "shape": list(shape),
-        "data": lengths.numpy().tobytes().decode("utf-8", errors="ignore"),
-        "values": values.numpy().tobytes().decode("utf-8", errors="ignore"),
-    }
-def convert_PIL_Image_to_byte_string(obj: PIL.Image.Image) -> str:
-    # Convert a PIL.Image.Image to a byte string
-    with BytesIO() as output:
-        obj.save(output, format="JPEG")
-        return {
-            "type": "PIL_image",
-            "size": obj.size,
-            "data": output.getvalue().decode("utf-8", errors="ignore"),
-        }
-def convert_PIL_Image_to_base64_string(obj: PIL.Image.Image) -> str:
-    # Convert a PIL.Image.Image to a base64 string
-    with BytesIO() as output:
-        obj.save(output, format="JPEG")
-        return base64.b64encode(output.getvalue()).decode("utf-8")
-
-async def yield_nested_objects(obj: Any, level: int = 1) -> Any:
-    """
-    Helper function to recursively yield nested objects in markdown format.
-    Each yield string starts with "result: " to indicate the start of a new result.
-    Lists and nested dictionaries are handled appropriately with hierarchical formatting.
-    """
-
-    if isinstance(obj, torch.Tensor):
-        if obj.dtype == torch.bool:
-            yield f"result: ```python\n{obj.shape}\n{convert_bool_tensor_to_byte_string(obj)}\n\n``"
-        else:
-            yield f"result: ```python\n{obj.shape}\n{obj.tolist()}\n\n```"
-    elif isinstance(obj, PIL.Image.Image):
-        new_id = str(uuid.uuid4())
-        image_path = os.path.join(IMAGE_DIR, f"{new_id}.jpg")
-        obj.save(image_path)
-        yield f"result: Image_id: {new_id}\n\n"
-        base64_image = convert_PIL_Image_to_base64_string(obj)
-        yield f"result: ![](data:image/jpg;base64,{base64_image})\n\n"
-    elif hasattr(obj, "__dict__"):
-        for key, value in obj.__dict__.items():
-            if key == "part_masks":
-                continue
-            yield f"result: {'#' * level} {key}\n\n"
-            async for msg in yield_nested_objects(value, level + 1):
-                yield msg
-    elif isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "part_masks":
-                continue
-            yield f"result: {'#' * level} {key}\n\n"
-            async for msg in yield_nested_objects(value, level + 1):
-                yield msg
-    elif isinstance(obj, list):
-        for idx, element in enumerate(obj):
-            yield f"result: {'#' * level} Node {idx}\n\n"
-            async for msg in yield_nested_objects(element, level + 1):
-                yield msg
-    else:
-        try:
-            obj_str = json.dumps(obj, indent=4)
-            yield f"result: ```json\n{obj_str}\n\n```"
-        except (TypeError, OverflowError):
-            yield f"result: {str(obj)}\n\n"
-
-
-# Function to recursively convert nested objects
-def convert_to_serializable(obj: Any) -> Any:
-    if hasattr(obj, "__dict__"):
-        if "part_crops" in obj.__dict__:
-            # save part crops to Image Dir
-            list_part_crops_ids = []
-            for idx, part_crop in enumerate(obj.__dict__["part_crops"]):
-                new_id = str(uuid.uuid4())
-                part_crop.save(os.path.join(IMAGE_DIR, f"{new_id}.jpg"))
-                list_part_crops_ids.append(new_id)
-            obj.__dict__["part_crops"] = list_part_crops_ids
-        if "part_masks" in obj.__dict__:
-            obj.__dict__["part_masks"] = []
-        return {
-            key: convert_to_serializable(value) for key, value in obj.__dict__.items()
-        }
-    elif isinstance(obj, PIL.Image.Image):
-        # return convert_PIL_Image_to_byte_string(obj)
-        new_id = str(uuid.uuid4())
-        obj.save(os.path.join(IMAGE_DIR, f"{new_id}.jpg"))
-        return new_id
-    elif isinstance(obj, torch.Tensor):
-        if isinstance(obj, torch.BoolTensor):
-            return convert_bool_tensor_to_byte_string(obj)
-        return obj.tolist()
-
-    elif isinstance(obj, dict):
-        if "part_crops" in obj:
-            # save part crops to Image Dir
-            list_part_crops_ids = []
-            for idx, part_crop in enumerate(obj["part_crops"]):
-                new_id = str(uuid.uuid4())
-                part_crop.save(os.path.join(IMAGE_DIR, f"{new_id}.jpg"))
-                list_part_crops_ids.append(new_id)
-            obj["part_crops"] = list_part_crops_ids
-
-        if "part_masks" in obj:
-            obj["part_masks"] = []
-        return {key: convert_to_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(element) for element in obj]
-    else:
-        return obj
-
-
-def initialize_models(gpuid=0):
-    """Initialize and return a dictionary of models."""
-    sam = build_sam(device=f"cuda:{gpuid}")
-    loc_and_seg = build_localizer_and_segmenter(sam, None)
-    feature_extractor = build_feature_extractor(device=f"cuda:{gpuid}")
-    default_kb = ConceptKB()
-    default_kb.initialize(
-        ConceptKBConfig(
-            n_trained_attrs=N_ATTRS_DINO,
-        )
-    )
-    default_kb.to(f"cuda:{gpuid}")
-
-    feature_pipeline = ConceptKBFeaturePipeline(loc_and_seg, feature_extractor)
-    controller = ExtendedController(default_kb, feature_pipeline)
-    logger.info(str("Models initialized"))
-
-    models = {
-        "sam": sam,
-        "loc_and_seg": loc_and_seg,
-        "feature_extractor": feature_extractor,
-        "controller": controller,
-    }
-    return models
-
-
-def model_process(input_queue, output_queue, gpuid=0):
-    models = initialize_models(
-        gpuid
-    )  # Ensure initialize_models is defined and correctly initializes models based on the gpuid.
-
-    while True:
-        try:
-            task_id, status, model_key, func_name, args, kwargs = input_queue.get()
-
-            if func_name == "shutdown":
-                break
-
-            model = models.get(model_key, None)
-            if model is None:
-                output_queue.put(
-                    (task_id, "error", f"Error: Model '{model_key}' not found")
-                )
-                continue
-
-            if not hasattr(model, func_name):
-                output_queue.put(
-                    (
-                        task_id,
-                        "error",
-                        f"Error: Model '{model_key}' has no function '{func_name}'",
-                    )
-                )
-                continue
-            # Perform the function call on the model
-            result = getattr(model, func_name)(*args, **kwargs)
-            output_queue.put((task_id, "done", result))
-        except Exception as e:
-            # General exception handling for any unexpected errors
-            output_queue.put((task_id, "error", str(e)))
+from feature_extraction import build_feature_extractor, build_sam
+from feature_extraction.trained_attrs import N_ATTRS_DINO
+from image_processing import build_localizer_and_segmenter
+from model.concept import ConceptExample, ConceptKB, ConceptKBConfig
 
 
 class Agent:
-    def __init__(self, gpuid=0):
+    def initialize_models(self, device: str = "cpu") -> dict[str, Any]:
+        """Initialize and return a dictionary of models."""
+        sam = build_sam(device=device)
+        loc_and_seg = build_localizer_and_segmenter(sam, None)
+        feature_extractor = build_feature_extractor(device=device)
+        default_kb = ConceptKB()
+        default_kb.initialize(
+            ConceptKBConfig(
+                n_trained_attrs=N_ATTRS_DINO,
+            )
+        )
+        default_kb.to(device)
+
+        feature_pipeline = ConceptKBFeaturePipeline(loc_and_seg, feature_extractor)
+        controller = ExtendedController(default_kb, feature_pipeline)
+        logger.info(str("Models initialized"))
+
+        models = {
+            "sam": sam,
+            "loc_and_seg": loc_and_seg,
+            "feature_extractor": feature_extractor,
+            "controller": controller,
+        }
+        return models
+
+    def model_process(
+        self, input_queue: Queue, output_queue: Queue, device="cpu"
+    ) -> None:
+
+        models = self.initialize_models(
+            device
+        )  # Ensure initialize_models is defined and correctly initializes models based on the cuda device
+
+        while True:
+            task_id, status, model_key, func_name, args, kwargs = input_queue.get()
+            try:
+                if func_name == "shutdown":
+                    break
+
+                model = models.get(model_key, None)
+                if model is None:
+                    output_queue.put(
+                        (task_id, "error", f"Error: Model '{model_key}' not found")
+                    )
+                    continue
+
+                if not hasattr(model, func_name):
+                    output_queue.put(
+                        (
+                            task_id,
+                            "error",
+                            f"Error: Model '{model_key}' has no function '{func_name}'",
+                        )
+                    )
+                    continue
+                # Perform the function call on the model
+                result = getattr(model, func_name)(*args, **kwargs)
+                output_queue.put((task_id, "done", result))
+            except Exception as e:
+                # General exception handling for any unexpected errors
+                output_queue.put((task_id, "error", str(e)))
+
+    def __init__(self, device) -> None:
         self.input_queue = Queue()
         self.output_queue = Queue()
         self.process = Process(
-            target=model_process, args=(self.input_queue, self.output_queue, gpuid)
+            target=self.model_process, args=(self.input_queue, self.output_queue, device)
         )
-        self.gpuid = gpuid
+        self.device = device
         self.process.start()
 
-    def call(self, model_key, func_name, *args, **kwargs):
+    def call(self, model_key, func_name, *args, **kwargs) -> Any:
         task_id = str(uuid.uuid4())
         status = "processing"
         self.input_queue.put((task_id, status, model_key, func_name, args, kwargs))
@@ -314,8 +160,9 @@ class Agent:
                 if result[1] == "done":
                     return result[2]  # Return the actual result
                 elif result[1] == "error":
-                    import traceback
                     import sys
+                    import traceback
+
                     logger.error(traceback.format_exc())
                     logger.error(sys.exc_info())
                     raise Exception(f"Error processing task {task_id}: {result[2]}")
@@ -324,7 +171,7 @@ class Agent:
                         f"Unexpected status for task {task_id}: {result[1]}"
                     )
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         if self.process.is_alive():
             self.input_queue.put((None, None, None, "shutdown", None, None))
             self.process.join()
@@ -334,35 +181,53 @@ class Agent:
         if not self.output_queue.empty():
             self.output_queue.close()
             self.output_queue.join_thread()
-        logger.info(str(f"Agent on GPU {self.gpuid} shut down"))
-        
+        logger.info(str(f"Agent on GPU {self.device} shut down"))
+
     def __del__(self):
         self.shutdown()
 
 
 import os
 from collections import deque
-import json
-from collections import OrderedDict
 
 
 class AgentManager:
-    def __init__(self):
+    """
+    The AgentManager class manages the agents and the concept knowledge bases (KBs) for each user.
+    """
+
+    def __init__(
+        self,
+        agent_gpu_list: list[int] = AGENT_GPU_LIST,
+        concept_kb_dir: str = CONCEPT_KB_CKPT,
+        default_ckpt: str = DEFAULT_CKPT,
+    ) -> None:
+        """
+        The AgentManager class manages the agents and the concept knowledge bases (KBs) for each user.
+
+
+        Args:
+            agent_gpu_list (list[int], optional): List of GPU IDs to assign to each agent. Defaults to AGENT_GPU_LIST.
+        """
         self.agents = {
-            f"agent{idx}": Agent(gpuid) for idx, gpuid in enumerate(AGENT_GPU_LIST)
-            # "agent2": Agent(2),  # Example agent for model B
-            # Add more agents as required
+            f"agent{idx}": Agent(f"cuda:{gpuid}") for idx, gpuid in enumerate(agent_gpu_list)
         }
         # Initialize a round-robin queue for distributing tasks
         self.round_robin_queue = deque(self.agents.keys())
-        self.users_concept_kb = OrderedDict()
-        self.save_path_concept_kb = CONCEPT_KB_CKPT
+        self.concept_kb_dir = concept_kb_dir
+        self.default_ckpt = default_ckpt
         self.checkpoint_path_dict = self.__init_checkpoint_path_dict()
 
-    def __init_checkpoint_path_dict(self):
+    def __init_checkpoint_path_dict(self) -> dict[str, list[str]]:
+        """
+        Get the checkpoint path dictionary for each user. The dictionary contains the user IDs and their checkpoint paths order by time.
+
+        Returns:
+            dict[str, list[str]]: Dictionary of user IDs and their checkpoint paths.
+        """
         new_dict = {}
-        for root, dirs, files in os.walk(self.save_path_concept_kb):
-            if root == self.save_path_concept_kb:
+        for root, dirs, files in os.walk(self.concept_kb_dir):
+            if root == self.concept_kb_dir:
                 continue
             if len(files) > 0:
                 user_id = os.path.basename(root)
@@ -373,10 +238,6 @@ class AgentManager:
     def shutdown(self):
         for agent in self.agents.values():
             agent.shutdown()
-        # for user_id in self.users_concept_kb:
-        #     self.save_concept_kb(user_id)
-        # with open(f"{self.save_path_concept_kb}/checkpoint_path_dict.json", "w") as f:
-        #     json.dump(self.checkpoint_path_dict, f)
 
         # Release the tensor from memory (if it's no longer needed)
         gc.collect()
@@ -385,80 +246,102 @@ class AgentManager:
 
         logger.info(str("All agents shut down and concept KBs saved"))
 
-    def get_next_agent_key(self):
+    def get_next_agent_key(self) -> str:
         # Rotate the queue and return the next agent key
         self.round_robin_queue.rotate(-1)
         return self.round_robin_queue[0]
 
-    def get_kb(self, user_id:str):
-        if user_id in self.users_concept_kb:
-            return self.users_concept_kb[user_id]
-        elif user_id in self.checkpoint_path_dict:
-            return ConceptKB.load(self.checkpoint_path_dict[user_id][-1])
-        else:
-            return ConceptKB.load(DEFAULT_CKPT)
+    ####################
+    # ConceptKB ops    #
+    ####################
+    def get_concept_kb(self, user_id: str, device: str = "cpu") -> ConceptKB:
+        """
+        This method gets the concept knowledge base (KB) for a user.
 
-    def get_concept_kb(self, user_id: str, agent):
+        Args:
+            user_id (str): User ID
+            device (str, optional): Device to load the concept KB. Defaults to "cpu".
 
-        if agent == None:
-            RuntimeError("Agent is None")
-        else:
-            gpu_id = agent.gpuid
+        Returns:
+            ConceptKB: Concept knowledge base
+        """
         logger.info(str(f"Getting concept KB for user {user_id}"))
-        if (
-            user_id not in self.users_concept_kb
-            and user_id not in self.checkpoint_path_dict
-        ):
-            concept_kb = ConceptKB.load(DEFAULT_CKPT)
-            self.users_concept_kb[user_id] = concept_kb
-            ckpt_path = self.save_concept_kb(user_id)
-            self.checkpoint_path_dict[user_id] = [ckpt_path]
-        elif user_id in self.users_concept_kb:
-            concept_kb = self.users_concept_kb[user_id]
-        elif user_id in self.checkpoint_path_dict:
+        if user_id in self.checkpoint_path_dict:
             concept_kb = ConceptKB.load(self.checkpoint_path_dict[user_id][-1])
         else:
-            raise Exception("Error in get_concept_kb")
+            # load default concept kb
+            concept_kb = ConceptKB.load(self.default_ckpt)
+            # save default concept kb
+            os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
+            checkpoint_path = f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
+            concept_kb.save(checkpoint_path)
+            self.checkpoint_path_dict[user_id] = [checkpoint_path]
 
-        # Drop the concept KB if number of kb exceeds 5
-        if user_id in self.users_concept_kb and len(self.users_concept_kb) > 4:
-            pop_id, user_kb = self.users_concept_kb.popitem(last=False)
-            logger.info(str(f"user {pop_id} concept KB dropped"))
-            user_kb.to("cpu")  
-            # Release the tensor from memory (if it's no longer needed)
-            del user_kb
-            gc.collect()  # Explicitly call garbage collector
-            # Additionally, to clear unused memory from the GPU cache
-            torch.cuda.empty_cache()
-        concept_kb.to(f"cuda:{gpu_id}")
-        logger.info(str(f"Concept KB loaded for user {user_id} to CUDA {gpu_id}"))
-        self.users_concept_kb[user_id] = concept_kb
+        # Move concept kb to device
+        concept_kb.to(device=device)
+        logger.info(str(f"Concept KB loaded for user {user_id} to device {device}"))
         return concept_kb
 
-    def save_concept_kb(self, user_id):
-        if user_id in self.users_concept_kb:
+    def save_concept_kb(self, user_id: str, concept_kb: ConceptKB) -> str:
+        """
+        Save the concept knowledge base (KB) for a user.
 
-            concept_kb = self.users_concept_kb[user_id]
-            checkpoint_path = f"{self.save_path_concept_kb}/{user_id}/concept_kb_epoch_{time.time()}.pt"
-            if not os.path.exists(f"{self.save_path_concept_kb}/{user_id}"):
-                os.makedirs(f"{self.save_path_concept_kb}/{user_id}")
-            concept_kb.save(checkpoint_path)
+        Args:
+            user_id (str): User ID
+            concept_kb (ConceptKB): Concept knowledge base
 
-            if user_id not in self.checkpoint_path_dict:
-                self.checkpoint_path_dict[user_id] = [checkpoint_path]
-            else:
-                self.checkpoint_path_dict[user_id].append(checkpoint_path)
+        Returns:
+            str: Checkpoint path
+        """
+        os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
+        checkpoint_path = f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
+        concept_kb.to("cpu")
+        concept_kb.save(checkpoint_path)
+        if user_id not in self.checkpoint_path_dict:
+            self.checkpoint_path_dict[user_id] = [checkpoint_path]
+        self.checkpoint_path_dict[user_id].append(checkpoint_path)
+        return checkpoint_path
+    
+    def undo_concept_kb(self, user_id: str) -> str:
+        """
+        Undo the last checkpoint of the concept knowledge base (KB) for a user.
+
+        Args:
+            user_id (str): User ID
+
+        Returns:
+            str: Checkpoint path
+        """
+        if user_id in self.checkpoint_path_dict and len(self.checkpoint_path_dict[user_id]) > 1:
+            checkpoint_path = self.checkpoint_path_dict[user_id][-2]
+            if os.path.exists(checkpoint_path):
+                os.remove(self.checkpoint_path_dict[user_id][-1])
+            self.checkpoint_path_dict[user_id].pop()
             return checkpoint_path
         else:
-            return None
+            return "No checkpoint to undo"
 
-    def wrapper_user_id_no_save(self, user_id: str, func, *args, **kwargs):
+    def executeControllerFunctionNoSave(self, user_id: str, func, *args, **kwargs) -> Any:
+        """
+        Execute a function in the controller without saving the concept knowledge base.
 
+        Args:
+            user_id (str): User ID
+            func (_type_): Function to execute
+            *args (_type_): Function arguments
+            **kwargs (_type_): Function keyword arguments
+
+        Raises:
+            Exception: Error in executeControllerFunctionNoSave
+
+        Returns:
+            Any: Function result
+        """
         agent_key = self.get_next_agent_key()
         concept_kb = None
         try:
             # load concept kb by user_id
-            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key])
+            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
 
             # Load user KB first
             self.agents[agent_key].call("controller", "load_kb", concept_kb)
@@ -466,11 +349,12 @@ class AgentManager:
             # run and return result
             return self.agents[agent_key].call("controller", func, *args, **kwargs)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
+
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
-            raise Exception(f"Error in wrapper_user_id_no_save: {str(e)}")
+            raise Exception(f"Error in executeControllerFunctionNoSave: {str(e)}")
         finally:
             if concept_kb is not None:
                 concept_kb.to("cpu")
@@ -478,45 +362,51 @@ class AgentManager:
                 # Optionally, you can clear the unused memory from the GPU cache
                 torch.cuda.empty_cache()
 
-    def wrapper_user_id_save(self, user_id: str, func, *args, **kwargs):
+    def executeControllerFunctionWithSave(self, user_id: str, func, *args, **kwargs) -> str:
+        """
+        If the function is successful, save the concept knowledge base.
+        
+
+        Args:
+            user_id (str): User ID
+            func (_type_): Function to execute
+
+        Raises:
+            Exception: _description_
+            Exception: _description_
+
+        Returns:
+            str: Checkpoint path
+        """
         agent_key = self.get_next_agent_key()
         concept_kb = None
         try:
             # load concept kb by user_id
-            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key])
-            if concept_kb is None:
-                raise Exception(f"Error: Concept KB not found for user {user_id}")
+            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
             # Load user KB first
             self.agents[agent_key].call("controller", "load_kb", concept_kb)
 
             # run and return result
+            concept_kb = self.agents[agent_key].call(
+                "controller", func, *args, **kwargs
+            )
 
-            concept_kb = self.agents[agent_key].call("controller", func, *args, **kwargs)
-            self.users_concept_kb[user_id] = concept_kb
-            self.save_concept_kb(user_id)
-            del self.users_concept_kb[user_id]
-            gc.collect()  # Explicitly call garbage collector
-
-            return concept_kb
+            # move concept kb to cpu
+            concept_kb.to("cpu")
+            ckpt_path = self.save_concept_kb(user_id, concept_kb)
+            return ckpt_path
         except Exception as e:
-            import traceback
+            # General exception handling for any unexpected errors
             import sys
-            logger.error(traceback.format_exc())
-            raise Exception(f"Error in wrapper_user_id_save: {str(e)}")
-        finally:
-            # run this block to release memory
-            if concept_kb is not None:
-                concept_kb.to("cpu")           
-                gc.collect()  # Explicitly call garbage collector
-                # Optionally, you can clear the unused memory from the GPU cache
-                torch.cuda.empty_cache()
+            import traceback
 
-    def predict_concept(self, user_id: str, image, threshold):
-        result = self.wrapper_user_id_no_save(
-            user_id, "predict_concept", image, threshold
-        )
-        # res = convert_to_serializable(result)
-        return result
+            logger.error(sys.exc_info())
+            logger.error(traceback.format_exc())
+            raise Exception(f"Error in executeControllerFunctionWithSave: {str(e)}")
+        finally:
+            gc.collect()  # Explicitly call garbage collector
+            # Optionally, you can clear the unused memory from the GPU cache
+            torch.cuda.empty_cache()
 
     def predict_from_subtree(
         self,
@@ -525,19 +415,9 @@ class AgentManager:
         root_concept_name: str,
         unk_threshold: float = 0.1,
     ) -> list[dict]:
-        result = self.wrapper_user_id_no_save(
+        return self.executeControllerFunctionNoSave(
             user_id, "predict_from_subtree", image, root_concept_name, unk_threshold
         )
-        return result
-        # return convert_to_serializable(result)
-
-    def train_concepts(self, user_id: str, concept_names: list[str], **train_concept_kwargs):
-        print("train_concepts", concept_names)
-        print()
-        result = self.wrapper_user_id_save(
-            user_id, "train_concepts", concept_names, **train_concept_kwargs
-        )
-        return result
 
     def predict_hierarchical(
         self,
@@ -546,24 +426,20 @@ class AgentManager:
         unk_threshold: float = 0.1,
         include_component_concepts: bool = False,
     ) -> list[dict]:
-        result = self.wrapper_user_id_no_save(
+        return self.executeControllerFunctionNoSave(
             user_id,
             "predict_hierarchical",
             image,
             unk_threshold,
             include_component_concepts,
         )
-        return result
-        # return convert_to_serializable(result)
 
     def predict_root_concept(
         self, user_id: str, image: Image.Image, unk_threshold: float = 0.1
     ) -> dict:
-        result = self.wrapper_user_id_no_save(
+        return self.executeControllerFunctionNoSave(
             user_id, "predict_root_concept", image, unk_threshold
         )
-        return result
-        # return convert_to_serializable(result)
 
     def is_concept_in_image(
         self,
@@ -572,15 +448,24 @@ class AgentManager:
         concept_name: str,
         unk_threshold: float = 0.1,
     ) -> bool:
-        result = self.wrapper_user_id_no_save(
+        return self.executeControllerFunctionNoSave(
             user_id, "is_concept_in_image", image, concept_name, unk_threshold
         )
-        return result
-        # return convert_to_serializable(result)
 
-    def add_hyponym(self, user_id: str, child_name: str, parent_name: str, child_max_retrieval_distance: float = 0.,streaming: bool = False):
-        result = self.wrapper_user_id_save(
-            user_id, "add_hyponym", child_name, parent_name, child_max_retrieval_distance
+    def add_hyponym(
+        self,
+        user_id: str,
+        child_name: str,
+        parent_name: str,
+        child_max_retrieval_distance: float = 0.0,
+        streaming: bool = False,
+    ):
+        result = self.executeControllerFunctionWithSave(
+            user_id,
+            "add_hyponym",
+            child_name,
+            parent_name,
+            child_max_retrieval_distance,
         )
         if streaming:
             return f"Hyponym {child_name} added to {parent_name}\n\n"
@@ -588,23 +473,22 @@ class AgentManager:
             return {"status": "success"}
         # return convert_to_serializable(result)
 
-    def add_component_concept(self, user_id: str, component_concept_name: str, concept_name: str, component_max_retrieval_distance: float = 0., streaming: bool = False):
-        result = self.wrapper_user_id_save(
-            user_id, "add_component_concept", component_concept_name, concept_name, component_max_retrieval_distance
-        )
-        if streaming:
-            return f"Component {component_concept_name} added to {concept_name}\n\n"
-        else:
-            return {"status": "success"}
-        # return convert_to_serializable(result)
-
-    def add_concept_negatives(self, user_id: str, images: list[PIL.Image.Image], concept_name: str,  streaming: bool = False):
+    def add_concept_negatives(
+        self,
+        user_id: str,
+        images: list[PIL.Image.Image],
+        concept_name: str,
+        streaming: bool = False,
+    ):
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
         for example in concept_examples:
             example.is_negative = True
-        result = self.wrapper_user_id_save(
-            user_id, "add_concept_negatives", concept_name, concept_examples, 
+        result = self.executeControllerFunctionWithSave(
+            user_id,
+            "add_concept_negatives",
+            concept_name,
+            concept_examples,
         )
         if streaming:
             yield f"status: Add negative examples successfully time: {time.time() - time_start}\n\n"
@@ -621,32 +505,43 @@ class AgentManager:
         component_max_retrieval_distance: float = 0.0,
         streaming: bool = False,
     ):
-        result = self.wrapper_user_id_save(
-            user_id, "add_component_concept", component_concept_name, concept_name, component_max_retrieval_distance
+        result = self.executeControllerFunctionWithSave(
+            user_id,
+            "add_component_concept",
+            component_concept_name,
+            concept_name,
+            component_max_retrieval_distance,
         )
         if streaming:
             return f"Component {component_concept_name} added to {concept_name}\n\n"
         else:
             return {"status": "success"}
-        # return convert_to_serializable(result)
+
+    ####################################
+    # ConceptKB methods for streaming  #
+    ####################################
 
     def reset_kb(self, user_id: str, clear_all: bool = False, streaming: bool = False):
-        logger.info(str(f"clear all: {clear_all}" ))
+        """
+        Reset the knowledge base for a user.
+
+        """
+        logger.info(f"clear all: {clear_all}")
+
         if user_id == "":
             user_id = "default_user"
-        if user_id  in self.users_concept_kb:
-            self.users_concept_kb.pop(user_id, None)
         if clear_all:
-            self.users_concept_kb[user_id] = ConceptKB()
-            # %% Initialize ConceptKB
-            self.users_concept_kb[user_id].initialize(
+            concept_kb = ConceptKB()
+            concept_kb.initialize(
                 ConceptKBConfig(
                     n_trained_attrs=N_ATTRS_DINO,
                 )
             )
+            concept_kb.to("cpu")
         else:
-            self.users_concept_kb[user_id] = ConceptKB.load(DEFAULT_CKPT)
-        self.save_concept_kb(user_id)
+            concept_kb = ConceptKB.load(self.default_ckpt)
+        
+        self.save_concept_kb(user_id, concept_kb)
         if streaming:
             return f"Knowledge base reset {'from scratch' if clear_all else 'default checkpoint'}\n\n"
         else:
@@ -674,11 +569,13 @@ class AgentManager:
 
             path = os.path.join(
                 save_log_and_seg_concept_dir,
-                new_id + ".pkl",
+                new_id + ".pkl"
             )
             with open(path, "wb") as f:
-                pickle.dump(loc_seg_output.cpu(detach= True), f)
-            logger.info(str("Loc and seg single image time: " + str(time.time() - time_start)))
+                pickle.dump(loc_seg_output.cpu(detach=True), f)
+            logger.info(
+                str("Loc and seg single image time: " + str(time.time() - time_start))
+            )
             return ConceptExample(
                 concept_name=concept_name,
                 image_path=image_path,
@@ -689,24 +586,40 @@ class AgentManager:
             image.close()
             torch.cuda.empty_cache()
 
-    def _loc_and_seg_multiple_images(self, images: list[PIL.Image.Image], concept_name: str):
+    def _loc_and_seg_multiple_images(
+        self, images: list[PIL.Image.Image], concept_name: str
+    ):
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = list(executor.map(self._loc_and_seg_single_image, images, [concept_name] * len(images)))
+            results = list(
+                executor.map(
+                    self._loc_and_seg_single_image, images, [concept_name] * len(images)
+                )
+            )
         return results
 
     def _train_concept(
-        self, user_id: str, concept_name: str, concept_examples: list[ConceptExample], previous_concept=None, streaming=False
+        self,
+        user_id: str,
+        concept_name: str,
+        concept_examples: list[ConceptExample],
+        previous_concept=None,
+        streaming=False,
     ):
-        result = self.wrapper_user_id_save(
+        result = self.executeControllerFunctionWithSave(
             user_id, "teach_concept", concept_name, concept_examples, previous_concept
         )
         if streaming:
-            return  f"status: \nConcept {concept_name} trained with {len(concept_examples)} examples\n\n"
+            return f"status: \nConcept {concept_name} trained with {len(concept_examples)} examples\n\n"
         else:
             return {"status": "success"}
 
     async def train_concept(
-        self, user_id: str, concept_name: str, images: list[PIL.Image.Image], previous_concept=None, streaming=False
+        self,
+        user_id: str,
+        concept_name: str,
+        images: list[PIL.Image.Image],
+        previous_concept=None,
+        streaming=False,
     ):
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
@@ -714,20 +627,38 @@ class AgentManager:
         if streaming:
             yield f"status: Total time for localization and segmentation for {len(images)} images: {time.time() - time_start}"
             time_start = time.time()
-            yield self._train_concept(user_id, concept_name, concept_examples, previous_concept, streaming=streaming)
+            yield self._train_concept(
+                user_id,
+                concept_name,
+                concept_examples,
+                previous_concept,
+                streaming=streaming,
+            )
             logger.info(str("Teach concept time: " + str(time.time() - time_start)))
             yield f"status: Teach concept time: {time.time() - time_start}"
         else:
-            self._train_concept(user_id, concept_name, concept_examples, previous_concept, streaming=streaming)
+            self._train_concept(
+                user_id,
+                concept_name,
+                concept_examples,
+                previous_concept,
+                streaming=streaming,
+            )
 
-    def add_examples(self, user_id:str, images: list[PIL.Image.Image], concept_name: str = None, streaming=False):
+    def add_examples(
+        self,
+        user_id: str,
+        images: list[PIL.Image.Image],
+        concept_name: str = None,
+        streaming=False,
+    ):
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
 
         print(f"concept_examples: {concept_examples}")
         print(f"concept_name: {concept_name}")
 
-        self.wrapper_user_id_save(
+        self.executeControllerFunctionWithSave(
             user_id,
             "add_examples",
             examples=concept_examples,
@@ -740,125 +671,93 @@ class AgentManager:
         else:
             return {"status": "success"}
 
-    def train_concepts(self, user_id:str, concept_names: list[str], streaming: bool = False, **train_concept_kwargs):
+    def train_concepts(
+        self,
+        user_id: str,
+        concept_names: list[str],
+        streaming: bool = False,
+        **train_concept_kwargs,
+    ):
         time_start = time.time()
         logger.info(f"\n\nconcept_names: {concept_names}\n\n")
         if streaming:
             yield f"status: Training {len(concept_names)} concepts\n\n"
-            self.wrapper_user_id_save(
+            self.executeControllerFunctionWithSave(
                 user_id, "train_concepts", concept_names, **train_concept_kwargs
             )
             yield f"status: Training completed\n\n"
             yield f"status: Total time for training {len(concept_names)} concepts: {time.time() - time_start}"
             yield f"result: Training succcessfully with {len(concept_names)} concepts\n\n"
         else:
-            result = self.wrapper_user_id_save(
+            result = self.executeControllerFunctionWithSave(
                 user_id, "train_concepts", concept_names, **train_concept_kwargs
             )
             return {"status": "success"}
 
     def get_zs_attributes(self, user_id: str, concept_name: str):
-        return self.wrapper_user_id_no_save(user_id, "get_zs_attributes", concept_name)
+        return self.executeControllerFunctionNoSave(user_id, "get_zs_attributes", concept_name)
 
-    def heatmap_image_comparison(self, user_id: str, image1: Image, image2: Image):
-        result = self.wrapper_user_id_no_save(
+    def heatmap_image_comparison(self, user_id: str, image1: PIL.Image.Image, image2: PIL.Image.Image):
+        result = self.executeControllerFunctionNoSave(
             user_id, "heatmap_image_comparison", image1, image2
         )
         return result
 
-    def heatmap_class_difference(self, user_id: str, concept1_name: str, concept2_name: str, image: Image = None):
+    def heatmap_class_difference(
+        self, user_id: str, concept1_name: str, concept2_name: str, image: PIL.Image.Image = None
+    ):
         logger.info(str(f"heatmap_class_difference: {concept1_name} - {concept2_name}"))
         logger.info(str(f"heatmap_class_difference: {image}"))
-        result = self.wrapper_user_id_no_save(
+        result = self.executeControllerFunctionNoSave(
             user_id, "heatmap_class_difference", concept1_name, concept2_name, image
         )
         return result
 
-    def heatmap(self, user_id: str, image: Image, concept_name: str, only_score_increasing_regions: bool = False, only_score_decreasing_regions: bool = False):
-        result = self.wrapper_user_id_no_save(
-            user_id, "heatmap", image, concept_name, only_score_increasing_regions, only_score_decreasing_regions
+    def heatmap(
+        self,
+        user_id: str,
+        image: PIL.Image.Image,
+        concept_name: str,
+        only_score_increasing_regions: bool = False,
+        only_score_decreasing_regions: bool = False,
+    ):
+        result = self.executeControllerFunctionNoSave(
+            user_id,
+            "heatmap",
+            image,
+            concept_name,
+            only_score_increasing_regions,
+            only_score_decreasing_regions,
         )
         return result
 
-    ##################
-    # Utils          #
-    ##################
-    # def _get_differences(
-    #     self,
-    #     attr_scores1: torch.Tensor,
-    #     attr_scores2: torch.Tensor,
-    #     attr_names: List[str],
-    #     weights1: torch.Tensor = None,
-    #     weights2: torch.Tensor = None,
-    #     top_k=5,
-    # ) -> Dict[str, List[Union[str, float]]]:
-    #     # Compute top attribute probability differences
-    #     if weights1 is not None and weights2 is not None:
-    #         probs1 = attr_scores1.squeeze().sigmoid()
-    #         probs2 = attr_scores2.squeeze().sigmoid()
-    #     else:
-    #         probs1 = attr_scores1.squeeze()
-    #         probs2 = attr_scores2.squeeze()
-    #     diffs = (probs1 - probs2).abs()
 
-    #     top_k = min(top_k, len(diffs))
+from contextlib import asynccontextmanager
 
-    #     if weights1 is not None and weights2 is not None:
-    #         attr_weights1 = weights1
-    #         attr_weights2 = weights2
-    #         # Weight the differences by the attribute weights
-    #         weighted_diffs = diffs * (attr_weights1.abs() + attr_weights2.abs())
-
-    #         top_diffs, top_inds = weighted_diffs.topk(top_k)
-    #     else:
-    #         top_diffs, top_inds = diffs.topk(top_k)
-
-    #     top_attr_names = [attr_names[i] for i in top_inds]
-
-    #     # Get the top k attribute probabilities and convert to list
-    #     probs1 = probs1[top_inds].tolist()
-    #     probs2 = probs2[top_inds].tolist()
-
-    #     return {
-    #         "name": top_attr_names,
-    #         "probs1": probs1,
-    #         "probs2": probs2,
-    #     }
-
-    # def get_predictor_heatmap_list(self, user_id: str, list_concept_names, image):
-    #     result = self.wrapper_user_id_no_save(
-    #         user_id, "get_predictor_heatmap_list", list_concept_names, image
-    #     )
-    #     return result
-
+import PIL.Image
 ################
 # FastAPI      #
 ################
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, UploadFile
-from fastapi.responses import Response, JSONResponse
-from PIL import Image
-from contextlib import asynccontextmanager
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, Response
+
 tags_metadata = [
     {
         "name": "predict",
         "description": "Predict methods from an image.",
     },
-    {
-        "name": "train",
-        "description": "Train methods from images."
-    },
-    {
-        "name": "compare",
-        "description": "Compare methods"
-    },
-    {
-        "name": "kb_ops",
-        "description": "Knowledge base operations"
-    }
+    {"name": "train", "description": "Train methods from images."},
+    {"name": "compare", "description": "Compare methods"},
+    {"name": "kb_ops", "description": "Knowledge base operations"},
 ]
 
 
-app = FastAPI(openapi_tags=tags_metadata, title="ECOLE API", description="API for ECOLE Image Demo", version="0.1.0")
+app = FastAPI(
+    openapi_tags=tags_metadata,
+    title="ECOLE API",
+    description="API for ECOLE Image Demo",
+    version="0.1.0",
+)
 
 
 @asynccontextmanager
@@ -878,65 +777,13 @@ async def lifespan(app: FastAPI):
     agent_manager.shutdown()
     logger.info(str("AgentManager shut down"))
 
+
 app.router.lifespan_context = lifespan
 
-# Initialize your Agent here within the context manager to ensure proper management
-# @app.on_event("startup")
-# async def startup_event():
-#     app.state.agentmanager = AgentManager()
 
 ############################
 # Predict methods          #
 ############################
-
-
-@app.post("/predict_concept", tags=["predict"])
-async def predict_concept(
-    user_id: str,  # Required field
-    image: UploadFile = File(...),  # Required file upload,
-    threshold: str = "0.7",
-    streaming: str = "false",
-):
-    if streaming == "true":
-        img = Image.open(image.file).convert("RGB")
-        async def streamer(img, threshold):
-            time_start = time.time()
-            # Convert to PIL Image
-            yield "status: Predicting concept..."
-            try:
-                result = app.state.agentmanager.predict_concept(user_id, img, float(threshold))
-                logger.info(str("Predict concept time: " + str(time.time() - time_start)))
-                # yield f"result: {json.dumps(result)}"
-                async for msg in yield_nested_objects(result):
-                    yield msg
-            except Exception as e:
-                import traceback
-                import sys
-                logger.error(traceback.format_exc())
-                logger.error(sys.exc_info())
-                yield f"error: {str(e)}"
-
-        return StreamingResponse(
-            streamer(img, threshold),
-            media_type="text/event-stream",
-        )
-    else:
-        time_start = time.time()
-        # Convert to PIL Image
-        img = Image.open(image.file)
-        img = img.convert("RGB")
-        try:
-            result = app.state.agentmanager.predict_concept(user_id, img, float(threshold))
-            logger.info(str("Predict concept time: " + str(time.time() - time_start)))
-            return JSONResponse(content=result)
-        except Exception as e:
-            import traceback
-            import sys
-            logger.error(traceback.format_exc())
-            logger.error(sys.exc_info())
-            raise HTTPException(status_code=404, detail=str(e))
-
-
 @app.post("/predict_from_subtree", tags=["predict"])
 async def predict_from_subtree(
     user_id: str,  # Required field
@@ -944,9 +791,10 @@ async def predict_from_subtree(
     image: UploadFile = File(...),  # Required file upload,
     unk_threshold: str = "0.7",
     streaming: str = "false",
-):  
+):
     if streaming == "true":
         img = Image.open(image.file).convert("RGB")
+
         async def streamer(img, root_concept_name, unk_threshold):
             time_start = time.time()
             # Convert to PIL Image
@@ -955,13 +803,16 @@ async def predict_from_subtree(
                 result = app.state.agentmanager.predict_from_subtree(
                     user_id, img, root_concept_name, float(unk_threshold)
                 )
-                logger.info(str("Predict from subtree time: " + str(time.time() - time_start)))
+                logger.info(
+                    str("Predict from subtree time: " + str(time.time() - time_start))
+                )
                 # yield f"result: {json.dumps(result)}"
                 async for msg in streaming_hierachical_predict_result(result):
                     yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -979,11 +830,14 @@ async def predict_from_subtree(
             result = app.state.agentmanager.predict_from_subtree(
                 user_id, img, root_concept_name, float(unk_threshold)
             )
-            logger.info(str("Predict from subtree time: " + str(time.time() - time_start)))
+            logger.info(
+                str("Predict from subtree time: " + str(time.time() - time_start))
+            )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
+
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
@@ -1000,6 +854,7 @@ async def predict_hierarchical(
     logger.info(f"streaming: {streaming}")
     if streaming == "true":
         img = Image.open(image.file).convert("RGB")
+
         async def streamer(img, unk_threshold, include_component_concepts):
             time_start = time.time()
             # Convert to PIL Image
@@ -1008,18 +863,28 @@ async def predict_hierarchical(
 
             try:
                 result = app.state.agentmanager.predict_hierarchical(
-                    user_id, img, float(unk_threshold), include_component_concepts if include_component_concepts == "True" else False
+                    user_id,
+                    img,
+                    float(unk_threshold),
+                    (
+                        include_component_concepts
+                        if include_component_concepts == "True"
+                        else False
+                    ),
                 )
 
-                logger.info(str("Predict hierarchical time: " + str(time.time() - time_start)))
+                logger.info(
+                    str("Predict hierarchical time: " + str(time.time() - time_start))
+                )
                 # async for msg in yield_nested_objects(result):
                 #     yield msg
                 async for msg in streaming_hierachical_predict_result(result):
                     yield msg
                 # yield f"result: {json.dumps(result)}"
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1037,11 +902,14 @@ async def predict_hierarchical(
             result = app.state.agentmanager.predict_hierarchical(
                 user_id, img, float(unk_threshold), include_component_concepts
             )
-            logger.info(str("Predict hierarchical time: " + str(time.time() - time_start)))
+            logger.info(
+                str("Predict hierarchical time: " + str(time.time() - time_start))
+            )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
+
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
@@ -1056,6 +924,7 @@ async def predict_root_concept(
 ):
     if streaming == "true":
         img = Image.open(image.file).convert("RGB")
+
         async def streamer(img, unk_threshold):
             time_start = time.time()
             # Convert to PIL Image
@@ -1064,14 +933,17 @@ async def predict_root_concept(
                 result = app.state.agentmanager.predict_root_concept(
                     user_id, img, float(unk_threshold)
                 )
-                logger.info(str("Predict root concept time: " + str(time.time() - time_start)))
+                logger.info(
+                    str("Predict root concept time: " + str(time.time() - time_start))
+                )
                 logger.info(str("result", result))
                 async for msg in yield_nested_objects(result):
                     yield msg
                 # yield f"result: {json.dumps(result)}"
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1089,14 +961,18 @@ async def predict_root_concept(
             result = app.state.agentmanager.predict_root_concept(
                 user_id, img, float(unk_threshold)
             )
-            logger.info(str("Predict root concept time: " + str(time.time() - time_start)))
+            logger.info(
+                str("Predict root concept time: " + str(time.time() - time_start))
+            )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
+
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
+
 
 @app.post("/is_concept_in_image", tags=["predict"])
 async def is_concept_in_image(
@@ -1105,21 +981,25 @@ async def is_concept_in_image(
     image: UploadFile = File(...),  # Required file upload,
     unk_threshold: str = "0.1",
     streaming: str = "false",
-):  
+):
     if streaming == "true":
         img = Image.open(image.file).convert("RGB")
+
         async def streamer(img, concept_name, unk_threshold):
             time_start = time.time()
             # Convert to PIL Image
             yield "status: Checking if concept in image..."
             try:
                 heatmap = app.state.agentmanager.heatmap(user_id, img, concept_name)
-                logger.info(str("Is concept in image time: " + str(time.time() - time_start)))
+                logger.info(
+                    str("Is concept in image time: " + str(time.time() - time_start))
+                )
                 for msg in streaming_heatmap(heatmap, concept_name):
                     yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1137,14 +1017,19 @@ async def is_concept_in_image(
             result = app.state.agentmanager.is_concept_in_image(
                 user_id, img, concept_name, float(unk_threshold)
             )
-            logger.info(str("Is concept in image time: " + str(time.time() - time_start)))
+            logger.info(
+                str("Is concept in image time: " + str(time.time() - time_start))
+            )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
+
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
+
+
 ###############
 # Compare Ops #
 ###############
@@ -1158,6 +1043,7 @@ async def heatmap_image_comparison(
     if streaming == "true":
         img1 = Image.open(image_1.file).convert("RGB")
         img2 = Image.open(image_2.file).convert("RGB")
+
         async def streamer(img1, img2):
             time_start = time.time()
             yield "status: Generating heatmap image comparison..."
@@ -1168,8 +1054,9 @@ async def heatmap_image_comparison(
                 for msg in streaming_diff_images(result):
                     yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1204,27 +1091,28 @@ def heatmap_class_difference(
 
     Otherwise, implements:
         "What is the difference between <class x> and <class y>"
-        
+
     Args:
         user_id: str: Required field
         concept1_name: str: Required field
         concept2_name: str: Required field
         image: UploadFile: file upload
         streaming: str: "false"
-    
+
     Returns:
         JSONResponse: content=result
-        
+
     Raises:
         HTTPException: status_code=404, detail=str(e)
-        
+
     Yields:
         StreamingResponse: streamer(concept1_name, concept2_name, img)
     """
 
     if streaming == "true":
         img = Image.open(image.file).convert("RGB") if image is not None else None
-        async def streamer( concept1_name, concept2_name, img):
+
+        async def streamer(concept1_name, concept2_name, img):
             time_start = time.time()
             yield "status: Generating heatmap class difference..."
             try:
@@ -1234,13 +1122,21 @@ def heatmap_class_difference(
                     concept2_name,
                     image=img,
                 )
-                logger.info(str("Heatmap class difference time: " + str(time.time() - time_start)))
+                logger.info(
+                    str(
+                        "Heatmap class difference time: "
+                        + str(time.time() - time_start)
+                    )
+                )
 
-                for msg in streaming_heatmap_class_difference(result, concept1_name, concept2_name, img):
+                for msg in streaming_heatmap_class_difference(
+                    result, concept1_name, concept2_name, img
+                ):
                     yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1262,6 +1158,7 @@ def heatmap_class_difference(
         except Exception as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+
 @app.post("/heatmap", tags=["compare"])
 def heatmap(
     user_id: str,  # Required field
@@ -1282,24 +1179,25 @@ def heatmap(
 
     """
     only_score_increasing_regions = (
-        True
-        if only_score_increasing_regions == "true"
-        else False
+        True if only_score_increasing_regions == "true" else False
     )
     only_score_decreasing_regions = (
-        True
-        if only_score_decreasing_regions == "true"
-        else False
+        True if only_score_decreasing_regions == "true" else False
     )
     logger.info(f"streaming: {streaming}")
     if streaming == "true":
         img = Image.open(image.file).convert("RGB")
+
         async def streamer(img, concept_name):
             time_start = time.time()
             yield "status: Generating heatmap..."
             try:
                 result = app.state.agentmanager.heatmap(
-                    user_id, img, concept_name, only_score_increasing_regions, only_score_decreasing_regions
+                    user_id,
+                    img,
+                    concept_name,
+                    only_score_increasing_regions,
+                    only_score_decreasing_regions,
                 )
                 logger.info(str("Heatmap time: " + str(time.time() - time_start)))
                 for msg in streaming_heatmap(
@@ -1307,11 +1205,12 @@ def heatmap(
                     concept_name,
                     only_score_increasing_regions,
                     only_score_decreasing_regions,
-                ): 
-                    yield msg  
+                ):
+                    yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1324,7 +1223,11 @@ def heatmap(
         img = Image.open(image.file).convert("RGB")
         try:
             result = app.state.agentmanager.heatmap(
-                user_id, img, concept_name, only_score_increasing_regions, only_score_decreasing_regions
+                user_id,
+                img,
+                concept_name,
+                only_score_increasing_regions,
+                only_score_decreasing_regions,
             )
             return JSONResponse(content=result)
         except Exception as e:
@@ -1335,6 +1238,7 @@ def heatmap(
 # Kb Ops      #
 ###############
 
+
 @app.post("/reset_kb", tags=["kb_ops"])
 async def reset_kb(
     user_id: str,  # Required field
@@ -1342,6 +1246,7 @@ async def reset_kb(
     streaming: str = "false",
 ):
     if streaming == "true":
+
         async def streamer(user_id, clear_all):
             time_start = time.time()
             yield "status: Resetting concept KB..."
@@ -1350,11 +1255,14 @@ async def reset_kb(
                     app.state.agentmanager.reset_kb(user_id, True)
                 else:
                     app.state.agentmanager.reset_kb(user_id, False)
-                logger.info(str("Reset concept KB time: " + str(time.time() - time_start)))
-                yield f"result: Knowledge base successfully reseted {'from scratch' if clear_all else 'default checkpoint'}\n\n"
+                logger.info(
+                    str("Reset concept KB time: " + str(time.time() - time_start))
+                )
+                yield f"result: Knowledge base successfully reset {'from scratch' if clear_all == "true" else 'default checkpoint'}\n\n"
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1374,16 +1282,20 @@ async def reset_kb(
         except Exception as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+
 @app.post("/add_hyponym", tags=["kb_ops"])
 async def add_hyponym(
     user_id: str,  # Required field
-    child_name: str ,  # Required field
-    parent_name: str ,  # Required field
+    child_name: str,  # Required field
+    parent_name: str,  # Required field
     child_max_retrieval_distance: str = "0",
     streaming: str = "alse",
 ):
     if streaming == "true":
-        async def streamer(user_id, child_name, parent_name, child_max_retrieval_distance):
+
+        async def streamer(
+            user_id, child_name, parent_name, child_max_retrieval_distance
+        ):
             time_start = time.time()
             yield "status: Adding hyponyms..."
             try:
@@ -1397,8 +1309,9 @@ async def add_hyponym(
                 logger.info(str("Add hyponym time: " + str(time.time() - time_start)))
                 yield f"result: {result}"
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}\n\n"
@@ -1414,24 +1327,31 @@ async def add_hyponym(
             )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
 
+
 @app.post("/add_component_concept", tags=["kb_ops"])
 async def add_component_concept(
     user_id: str,  # Required field
-    component_concept_name: str ,  # Required field
-    concept_name: str ,  # Required field
+    component_concept_name: str,  # Required field
+    concept_name: str,  # Required field
     component_max_retrieval_distance: str = "0",
     streaming: str = "false",
 ):
     if streaming == "true":
         time_start = time.time()
-        async def streamer(user_id, component_concept_name, concept_name, component_max_retrieval_distance):
+
+        async def streamer(
+            user_id,
+            component_concept_name,
+            concept_name,
+            component_max_retrieval_distance,
+        ):
             yield "status: Adding component concept..."
             try:
                 result = app.state.agentmanager.add_component_concept(
@@ -1441,42 +1361,56 @@ async def add_component_concept(
                     float(component_max_retrieval_distance),
                     streaming=streaming,
                 )
-                logger.info(str("Add component concept time: " + str(time.time() - time_start)))
+                logger.info(
+                    str("Add component concept time: " + str(time.time() - time_start))
+                )
                 yield f"result: {result}"
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
+
         return StreamingResponse(
-            streamer(user_id, component_concept_name, concept_name, component_max_retrieval_distance),
+            streamer(
+                user_id,
+                component_concept_name,
+                concept_name,
+                component_max_retrieval_distance,
+            ),
             media_type="text/event-stream",
         )
     else:
         try:
             result = app.state.agentmanager.add_component_concept(
-                user_id, component_concept_name, concept_name, float(component_max_retrieval_distance)
+                user_id,
+                component_concept_name,
+                concept_name,
+                float(component_max_retrieval_distance),
             )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
 
+
 @app.post("/add_examples", tags=["kb_ops"])
 async def add_examples(
     user_id: str,  # Required field
-    concept_name: str ,  # Required field
+    concept_name: str,  # Required field
     images: List[UploadFile] = File(...),  # Required field
     streaming: str = "false",
 ):
 
     images = [Image.open(image.file).convert("RGB") for image in images]
     if streaming == "true":
+
         async def streamer(user_id, concept_name, imgs):
             yield "status: Adding examples..."
             try:
@@ -1486,8 +1420,9 @@ async def add_examples(
                 for msg in result:
                     yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1499,13 +1434,11 @@ async def add_examples(
     else:
         try:
             images = [Image.open(image.file).convert("RGB") for image in images]
-            result = app.state.agentmanager.add_examples(
-                user_id, concept_name, images
-            )
+            result = app.state.agentmanager.add_examples(user_id, concept_name, images)
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
@@ -1515,13 +1448,14 @@ async def add_examples(
 @app.post("/add_concept_negatives", tags=["kb_ops"])
 async def add_concept_negatives(
     user_id: str,  # Required field
-    concept_name: str ,  # Required field
+    concept_name: str,  # Required field
     images: List[UploadFile] = File(...),  # Required field
     streaming: str = "false",
 ):
 
     negatives = [Image.open(negative.file).convert("RGB") for negative in images]
     if streaming == "true":
+
         async def streamer(user_id, concept_name, imgs):
             yield "status: Adding concept negatives..."
             try:
@@ -1531,8 +1465,9 @@ async def add_concept_negatives(
                 for msg in result:
                     yield msg
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1543,18 +1478,23 @@ async def add_concept_negatives(
         )
     else:
         try:
-            negatives = [Image.open(negative.file).convert("RGB") for negative in negatives]
+            negatives = [
+                Image.open(negative.file).convert("RGB") for negative in negatives
+            ]
             result = app.state.agentmanager.add_concept_negatives(
-                user_id, negatives, concept_name,
+                user_id,
+                negatives,
+                concept_name,
             )
             return JSONResponse(content=result)
         except Exception as e:
-            import traceback
             import sys
+            import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
+
 
 @app.post("/train_concept", tags=["train"])
 async def train_concept(
@@ -1566,6 +1506,7 @@ async def train_concept(
 ):
     image_files = [Image.open(image.file).convert("RGB") for image in images]
     if streaming == "true":
+
         async def streamer(user_id, concept_name, image_files, streaming):
             yield "status: \nTraining concept...\n"
             try:
@@ -1576,8 +1517,9 @@ async def train_concept(
                     yield f"status: {res}"
                 logger.info(str("Train concept time: " + str(time.time() - time_start)))
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1595,12 +1537,13 @@ async def train_concept(
             logger.info(str("Train concept time: " + str(time.time() - time_start)))
             return JSONResponse(content={"status": "success"})
         except Exception as e:
-            import traceback
             import sys
+            import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
+
 
 @app.post("/train_concepts", tags=["train"])
 async def train_concepts(
@@ -1609,16 +1552,20 @@ async def train_concepts(
     streaming: str = "false",
 ):
     if streaming == "true":
+
         async def streamer(user_id, cncpts):
             yield "status: \nTraining concepts...\n"
             try:
                 time_start = time.time()
                 for res in app.state.agentmanager.train_concepts(user_id, cncpts):
                     yield res
-                logger.info(str("Train concepts time: " + str(time.time() - time_start)))
+                logger.info(
+                    str("Train concepts time: " + str(time.time() - time_start))
+                )
             except Exception as e:
-                import traceback
                 import sys
+                import traceback
+
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
@@ -1630,114 +1577,18 @@ async def train_concepts(
     else:
         time_start = time.time()
         try:
-            await app.state.agentmanager.train_concepts(
-                user_id, concepts
-            )
+            await app.state.agentmanager.train_concepts(user_id, concepts)
             logger.info(str("Train concepts time: " + str(time.time() - time_start)))
             return JSONResponse(content={"status": "success"})
         except Exception as e:
-            import traceback
             import sys
+            import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
             raise HTTPException(status_code=404, detail=str(e))
 
-# @app.post("/diff_between_predictions")
-# async def diff_between_predictions(
-#     user_id: str,  # Required field
-#     image1: UploadFile = File(...),  # Required file upload,
-#     image2: UploadFile = File(...),  # Required file upload,
-#     threshold: str = "0",
-# ):
-#     time_start = time.time()
-#     if user_id == "":
-#         user_id = "default_user"
-#     try:
-#         img1 = Image.open(image1.file).convert("RGB")
-#         img2 = Image.open(image2.file).convert("RGB")
-#         # Call your segmentation function (assuming `server.run_segmentation` is defined elsewhere)
-#         dict_result = app.state.agentmanager.diff_between_predictions(
-#             user_id, img1, img2, float(threshold)
-#         )
-#         print("Predict concept time: " + str(time.time() - time_start))
-#         return dict_result
-#     except Exception as e:
-#         raise HTTPException(status_code=404, detail=str(e))
 
-
-# @app.get("/diff_concepts")
-# async def diff_concepts(
-#     user_id: str = "",  # Required field
-#     concept1: str = "",  # Required field
-#     concept2: str = "",
-#     threshold: str = "0",
-# ):
-#     time_start = time.time()
-#     if user_id == "":
-#         user_id = "default_user"
-#     try:
-#         differences = app.state.agentmanager.diff_concepts(user_id, concept1, concept2)
-#         print("Predict concept time: " + str(time.time() - time_start))
-#         return differences
-#     except Exception as e:
-#         import traceback
-#         import sys
-#         print(traceback.format_exc())
-#         print(sys.exc_info())
-#         raise HTTPException(status_code=404, detail=str(e))
-
-
-# @app.post("/train_concept")
-# async def add_examples(user_id: str, concept_name: str, examples: List[UploadFile], previous_concept: str = "None"):
-#     time_start = time.time()
-#     img_list = [Image.open(example.file).convert("RGB") for example in examples]
-#     try:
-#         app.state.agentmanager.train_concept(user_id, concept_name, img_list, None if previous_concept == "None" else previous_concept)
-#         print("Teach concept time: " + str(time.time() - time_start))
-#         return {"status": "success"}
-#     except Exception as e:
-#         raise HTTPException(status_code=404, detail=str(e))
-
-
-# @app.get("/reset-server")
-# async def reset_server(user_id: str, status: str = ""):
-#     try:
-#         if status == "all":
-#             app.state.agentmanager.reset_conceptkb(user_id, True)
-#         else:
-#             app.state.agentmanager.reset_conceptkb(user_id, False)
-
-#         return Response(status_code=200)
-#     except Exception as e:
-#         raise HTTPException(status_code=404, detail=str(e))
-
-
-# @app.get("/get_zs_attributes")
-# async def get_zs_attributes(user_id: str, concept_name: str):
-#     if user_id == "":
-#         user_id = "default_user"
-#     try:
-#         return app.state.agentmanager.get_zs_attributes(user_id, concept_name)
-#     except Exception as e:
-#         raise HTTPException(status_code=404, detail=str(e))
-
-# @app.post("/get-predictor-heatmap-list")
-# async def get_predictor_heatmap_list(user_id: str, list_concept_names: str, image: UploadFile = File(...)):
-#     img = Image.open(image.file)
-#     img = img.convert("RGB")
-#     list_names = list_concept_names.split(", ")
-#     try:
-#         return app.state.agentmanager.get_predictor_heatmap_list(
-#             user_id, list_names, img
-#         )
-#     except Exception as e:
-#         raise HTTPException(status_code=404, detail=str(e))
-
-
-# # @app.on_event("shutdown")
-# # async def shutdown_event():
-# #     app.state.agentmanager.shutdown()  # Ensure the agent is cleanly shut down
 @app.post("/images")
 def upload_image(image: UploadFile = File(...)):
     img = Image.open(image.file)
@@ -1750,15 +1601,19 @@ def get_image(uid):
     filename = f"{uid}.jpg"
     return FileResponse(os.path.join(IMAGE_DIR, filename), media_type="image/jpg")
 
+
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn')
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=16004)
+
 
 @app.post("/tensor")
 def upload_tensor(tensor: UploadFile = File(...)):
     tensor.save(os.path.join(TENSOR_DIR, tensor.filename))
     return {"filename": tensor.filename}
+
 
 @app.get("/tensor/{uid}")
 def get_tensor(uid):

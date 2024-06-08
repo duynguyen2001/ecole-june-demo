@@ -2,29 +2,29 @@
 import sys
 
 sys.path.append("/shared/nas2/knguye71/ecole-june-demo/ecole_mo9_demo/src")
-from controller import Controller
-from feature_extraction.trained_attrs import N_ATTRS_DINO
-from kb_ops import ConceptKBTrainer, ConceptKBPredictor
-from model.concept import ConceptKB, ConceptKBConfig, ConceptExample, Concept
-
-# from typing import Union, Literal
-# from llm import LLMClient
-# from score import AttributeScorer
-from kb_ops.retrieve import CLIPConceptRetriever
-from kb_ops.caching import ConceptKBFeatureCacher
-from kb_ops.feature_pipeline import ConceptKBFeaturePipeline
+import gc
+import logging
+import os
+import sys
+# import base64
+import time
+import traceback
 
 # from feature_extraction.trained_attrs import N_ATTRS_SUBSET
 import PIL
 import torch
-# import base64
-import time
-import traceback
-import os
-import sys
-import gc
+from controller import Controller
+from feature_extraction.trained_attrs import N_ATTRS_DINO
+from kb_ops import ConceptKBPredictor, ConceptKBTrainer
+from kb_ops.caching.cacher import ConceptKBFeatureCacher
+from kb_ops.feature_pipeline import ConceptKBFeaturePipeline
+# from typing import Union, Literal
+# from llm import LLMClient
+# from score import AttributeScorer
+from kb_ops.retrieve import CLIPConceptRetriever
+from model.concept import Concept, ConceptExample, ConceptKB, ConceptKBConfig
 from PIL import Image
-import logging
+
 # import torch.nn as nn
 # import numpy as np
 # from rembg import remove
@@ -127,13 +127,13 @@ class ExtendedController(Controller):
 
     def train_concepts(self, concept_names: list[str], **train_concept_kwargs):
         for concept in self.get_markov_blanket(concept_names):
-            print(f"Training concept: {concept.name}")
+            logger.info(f"Training concept: {concept.name}")
             self.train_concept(concept.name, **train_concept_kwargs)
         currentkb = self.concept_kb
         currentkb.to("cpu")
-        print("Training complete.")
-        print("current_cuda_device", torch.cuda.current_device(), torch.cuda.get_device_name())
-        print("currentkb", currentkb)
+        logger.info("Training complete.")
+        logger.info("current_cuda_device", torch.cuda.current_device(), torch.cuda.get_device_name())
+        logger.info("currentkb", currentkb)
         return currentkb
 
     def add_examples(self, examples: list[ConceptExample], concept_name: str = None, concept: Concept = None):
@@ -177,8 +177,8 @@ class ExtendedController(Controller):
         except Exception as e:
             raise RuntimeError(f'No concept found for "{concept_name2}".')
 
-        print("concept1", concept1.name)
-        print("concept2", concept2.name)
+        logger.info("concept1", concept1.name)
+        logger.info("concept2", concept2.name)
 
         # weights1 = concept1.predictor.img_trained_attr_weights.weights.data.cpu()
         # weights2 = concept2.predictor.img_trained_attr_weights.weights.data.cpu()
@@ -253,8 +253,8 @@ class ExtendedController(Controller):
     #             # )
 
     #             # predictor_weights = concept1_weights, concept2_weights
-    #             print("score1", scores_1)
-    #             print("score2", scores_2)
+    #             logger.info("score1", scores_1)
+    #             logger.info("score2", scores_2)
 
     #             return {
     #                 "name": all_queries,
@@ -384,7 +384,7 @@ class ExtendedController(Controller):
         #                         attributes[k] = v.tolist()
         #                         if not isinstance(attributes[k], list):
         #                             attributes[k] = [attributes[k]]
-        #                 print("is_below_unk_threshold", result["prediction"]["is_below_unk_threshold"])
+        #                 logger.info("is_below_unk_threshold", result["prediction"]["is_below_unk_threshold"])
         #                 attributes["is_below_unk_threshold"] = result["prediction"][
         #                     "is_below_unk_threshold"
         #                 ]
@@ -520,7 +520,7 @@ class ExtendedController(Controller):
     #         }
 
     def teach_concept(self, concept_name, concept_examples: ConceptExample, previous_concept_name= None):
-        print(
+        logger.info(
             "current_cuda_device",
             torch.cuda.current_device(),
             torch.cuda.get_device_name(),
@@ -538,8 +538,8 @@ class ExtendedController(Controller):
             currentkb.to("cpu")
             return currentkb
         except Exception as e:
-            print(traceback.format_exc())
-            print(sys.exc_info()[2])
+            logger.info(traceback.format_exc())
+            logger.info(sys.exc_info()[2])
             raise RuntimeError(f"Failed to train concept {concept_name}.")
         finally:
             self.reset_KB(clear_all=True)
@@ -614,14 +614,14 @@ class ExtendedController(Controller):
 #                 heatmap = self.clamping(heatmap)
 #             elif strategy == "normalize":
 #                 heatmap = self.normalize(heatmap)
-#             print("heatmap", heatmap.shape)
+#             logger.info("heatmap", heatmap.shape)
 #             # Mask image background
 #             heatmap = heatmap * img_mask  # (h, w, 3)
-#             print("heatmap after", heatmap.shape)
+#             logger.info("heatmap after", heatmap.shape)
 #             return heatmap.detach().cpu()
 #         except Exception as e:
-#             print(traceback.format_exc())
-#             print(sys.exc_info()[2])
+#             logger.info(traceback.format_exc())
+#             logger.info(sys.exc_info()[2])
 #             raise RuntimeError(f"Failed to get heatmap for {concept_name}.")
 
 #     def normalize(self, x: torch.Tensor):
@@ -671,5 +671,5 @@ if __name__ == "__main__":
 
 # %%
     for concept in new_kb.concepts:
-        print(concept, concept.predictor.device)
+        logger.info(concept, concept.predictor.device)
 # %%
