@@ -9,6 +9,9 @@ import PIL
 import PIL.Image
 import torch
 from kb_ops.predict import PredictOutput
+from model.concept.concept_kb import ConceptKB
+from server_utils import (convert_bool_tensor_to_byte_string,
+                          convert_PIL_Image_to_base64_string)
 
 IMAGE_DIR = os.environ.get(
     "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
@@ -143,7 +146,7 @@ def image_with_mask_md_template(
 
 
 def format_prediction_result(
-    output: PredictOutput, rev_dict: dict = None, top_k: int = 5
+    output: PredictOutput, rev_dict: dict | None = None, top_k: int = 5
 ):
     nodes = []
     rev_list = (
@@ -578,3 +581,37 @@ async def yield_nested_objects(obj: Any, level: int = 1) -> Any:
             yield f"result: ```json\n{obj_str}\n\n```"
         except (TypeError, OverflowError):
             yield f"result: {str(obj)}\n\n"
+
+def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
+    """
+    Streams the concept knowledge base.
+
+    Args:
+        concept_kb (ConceptKB): The concept knowledge base.
+
+    Yields:
+        Generator[str, None, None]: The generated text.
+    """
+    yield f"result: # Concept Knowledge Base\n\n"
+    yield f"result: The concept knowledge base contains {len(concept_kb)} concepts.\n\n"
+    concepts = []
+    containing_concepts = []
+    component_concepts = []
+    for concept_name, concept in concept_kb._concepts.items():
+        concepts.append(concept_name)
+        for child in concept.containing_concepts.keys():
+            containing_concepts.append((concept_name, child))
+        for component in concept.component_concepts.keys():
+            component_concepts.append((concept_name, component))
+
+    concept_kb_dict = {
+        "concepts": concepts,
+        "containing_concepts": containing_concepts,
+        "component_concepts": component_concepts,
+    }
+
+    yield f"""result: ```concept-graph
+{json.dumps(concept_kb_dict, indent=4)}
+```
+"""
+
