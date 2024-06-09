@@ -1,9 +1,11 @@
-from typing import List, AsyncGenerator
-import httpx
-from utils import streaming_response_yield, streaming_response_end, convert_base64_to_upload_file, substitute_brackets
-from model.Counter import Counter
-import os
 import logging
+import os
+from typing import AsyncGenerator, List
+
+import httpx
+from model.Counter import Counter
+from utils import (convert_base64_to_upload_file, streaming_response_end,
+                   streaming_response_yield, substitute_brackets)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -44,7 +46,7 @@ async def _make_request(function_name: str, args: dict[str, str], files: object,
     logger.info(f"Making a request to the image backend API with function {url}, args: {args}, images: {files}")
     
 
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream("POST", url, params=args, files=files) as response:
             async for chunk in response.aiter_text():
                 if chunk.startswith("status: "):
