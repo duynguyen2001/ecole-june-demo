@@ -1,6 +1,7 @@
 # %%
 
 from dotenv import load_dotenv
+from regex import R
 
 load_dotenv()
 # %%
@@ -597,61 +598,20 @@ class AgentManager:
             )
         return results
 
-    def _train_concept(
-        self,
-        user_id: str,
-        concept_name: str,
-        concept_examples: list[ConceptExample],
-        previous_concept=None,
-        streaming=False,
-    ):
-        result = self.executeControllerFunctionWithSave(
-            user_id, "teach_concept", concept_name, concept_examples, previous_concept
-        )
-        if streaming:
-            return f"status: \nConcept {concept_name} trained with {len(concept_examples)} examples\n\n"
-        else:
-            return {"status": "success"}
-
-    async def train_concept(
-        self,
-        user_id: str,
-        concept_name: str,
-        images: list[PIL.Image.Image],
-        previous_concept=None,
-        streaming=False,
-    ):
-        time_start = time.time()
-        concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
-        logger.info(str("Loc and seg time: " + str(time.time() - time_start)))
-        if streaming:
-            yield f"status: Total time for localization and segmentation for {len(images)} images: {time.time() - time_start}"
-            time_start = time.time()
-            yield self._train_concept(
-                user_id,
-                concept_name,
-                concept_examples,
-                previous_concept,
-                streaming=streaming,
-            )
-            logger.info(str("Teach concept time: " + str(time.time() - time_start)))
-            yield f"status: Teach concept time: {time.time() - time_start}"
-        else:
-            self._train_concept(
-                user_id,
-                concept_name,
-                concept_examples,
-                previous_concept,
-                streaming=streaming,
-            )
-
     def add_examples(
         self,
         user_id: str,
         images: list[PIL.Image.Image],
-        concept_name: str = None,
+        concept_name: str | None = None,
         streaming=False,
     ):
+        
+        if concept_name is None:
+            RuntimeError("Concept name is required")
+        
+        concept_kb = self.get_concept_kb(user_id)
+        concept_kb.get_concept(concept_name)
+            
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
 
@@ -680,19 +640,27 @@ class AgentManager:
     ):
         time_start = time.time()
         logger.info(f"\n\nconcept_names: {concept_names}\n\n")
-        if streaming:
-            yield f"status: Training {len(concept_names)} concepts\n\n"
-            self.executeControllerFunctionWithSave(
-                user_id, "train_concepts", concept_names, **train_concept_kwargs
-            )
-            yield f"status: Training completed\n\n"
-            yield f"status: Total time for training {len(concept_names)} concepts: {time.time() - time_start}"
-            yield f"result: Training succcessfully with {len(concept_names)} concepts\n\n"
-        else:
-            result = self.executeControllerFunctionWithSave(
-                user_id, "train_concepts", concept_names, **train_concept_kwargs
-            )
-            return {"status": "success"}
+        try:
+            if streaming:
+                yield f"status: Training {len(concept_names)} concepts\n\n"
+                self.executeControllerFunctionWithSave(
+                    user_id, "train_concepts", concept_names, **train_concept_kwargs
+                )
+                yield f"status: Training completed\n\n"
+                yield f"status: Total time for training {len(concept_names)} concepts: {time.time() - time_start}"
+                yield f"result: Training successfully with {len(concept_names)} concepts\n\n"
+            else:
+                self.executeControllerFunctionWithSave(
+                    user_id, "train_concepts", concept_names, **train_concept_kwargs
+                )
+                return {"status": "success"}
+        except Exception as e:
+            import sys
+            import traceback
+
+            logger.error(traceback.format_exc())
+            logger.error(sys.exc_info())
+            raise Exception(f"Error in train_concepts: {str(e)}")
 
     def get_zs_attributes(self, user_id: str, concept_name: str):
         return self.executeControllerFunctionNoSave(user_id, "get_zs_attributes", concept_name)
@@ -1408,7 +1376,7 @@ async def add_examples(
     streaming: str = "false",
 ):
 
-    images = [Image.open(image.file).convert("RGB") for image in images]
+    processed_images = [Image.open(image.file).convert("RGB") for image in images]
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):
@@ -1428,13 +1396,13 @@ async def add_examples(
                 yield f"error: {str(e)}"
 
         return StreamingResponse(
-            streamer(user_id, concept_name, images),
+            streamer(user_id, concept_name, processed_images),
             media_type="text/event-stream",
         )
     else:
         try:
-            images = [Image.open(image.file).convert("RGB") for image in images]
-            result = app.state.agentmanager.add_examples(user_id, concept_name, images)
+            processed_images = [Image.open(image.file).convert("RGB") for image in images]
+            result = app.state.agentmanager.add_examples(user_id, concept_name, processed_images)
             return JSONResponse(content=result)
         except Exception as e:
             import sys
@@ -1452,8 +1420,10 @@ async def add_concept_negatives(
     images: List[UploadFile] = File(...),  # Required field
     streaming: str = "false",
 ):
-
-    negatives = [Image.open(negative.file).convert("RGB") for negative in images]
+    
+    processed_images = [
+        Image.open(negative.file).convert("RGB") for negative in images
+    ]
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):
@@ -1473,17 +1443,14 @@ async def add_concept_negatives(
                 yield f"error: {str(e)}"
 
         return StreamingResponse(
-            streamer(user_id, concept_name, negatives),
+            streamer(user_id, concept_name, processed_images),
             media_type="text/event-stream",
         )
     else:
         try:
-            negatives = [
-                Image.open(negative.file).convert("RGB") for negative in negatives
-            ]
             result = app.state.agentmanager.add_concept_negatives(
                 user_id,
-                negatives,
+                processed_images,
                 concept_name,
             )
             return JSONResponse(content=result)
@@ -1496,54 +1463,59 @@ async def add_concept_negatives(
             raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/train_concept", tags=["train"])
-async def train_concept(
-    user_id: str,  # Required field
-    concept_name: str,  # Required field
-    images: List[UploadFile] = File(...),  # Required field
-    # previous_concept: str = "None",
-    streaming: str = "false",
-):
-    image_files = [Image.open(image.file).convert("RGB") for image in images]
+@app.post("/get_concept_kb", tags=["kb_ops"])
+def get_concept_kb(user_id: str, streaming: str = "false"):
     if streaming == "true":
-
-        async def streamer(user_id, concept_name, image_files, streaming):
-            yield "status: \nTraining concept...\n"
-            try:
-                time_start = time.time()
-                async for res in app.state.agentmanager.train_concept(
-                    user_id, concept_name, image_files, streaming=streaming
-                ):
-                    yield f"status: {res}"
-                logger.info(str("Train concept time: " + str(time.time() - time_start)))
-            except Exception as e:
-                import sys
-                import traceback
-
-                logger.error(traceback.format_exc())
-                logger.error(sys.exc_info())
-                yield f"error: {str(e)}"
-
-        return StreamingResponse(
-            streamer(user_id, concept_name, image_files, streaming),
-            media_type="text/event-stream",
-        )
-    else:
-        time_start = time.time()
-        try:
-            await app.state.agentmanager.train_concept(
-                user_id, concept_name, image_files
+            
+            async def streamer(user_id):
+                yield "status: Getting concept KB..."
+                try:
+                    result = app.state.agentmanager.get_concept_kb(user_id)
+                    yield f"result: {result}"
+                except Exception as e:
+                    import sys
+                    import traceback
+    
+                    logger.error(traceback.format_exc())
+                    logger.error(sys.exc_info())
+                    yield f"error: {str(e)}"
+    
+            return StreamingResponse(
+                streamer(user_id),
+                media_type="text/event-stream",
             )
-            logger.info(str("Train concept time: " + str(time.time() - time_start)))
-            return JSONResponse(content={"status": "success"})
-        except Exception as e:
-            import sys
-            import traceback
-
-            logger.error(traceback.format_exc())
-            logger.error(sys.exc_info())
-            raise HTTPException(status_code=404, detail=str(e))
-
+    try:
+        result = app.state.agentmanager.get_concept_kb(user_id)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    
+@app.post("/get_checkpoint_list", tags=["kb_ops"])
+def get_checkpoint_list(user_id: str, streaming: str = "false"):
+    if streaming == "true":
+            
+            async def streamer(user_id):
+                yield "status: Getting checkpoint list..."
+                try:
+                    result = app.state.agentmanager.get_checkpoint_list(user_id)
+                    yield f"result: {result}"
+                except Exception as e:
+                    import sys
+                    import traceback
+    
+                    logger.error(traceback.format_exc())
+                    logger.error(sys.exc_info())
+                    yield f"error: {str(e)}"
+    
+            return StreamingResponse(
+                streamer(user_id),
+                media_type="text/event-stream",
+            )
+    try:
+        result = app.state.agentmanager.get_checkpoint_list(user_id)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 @app.post("/train_concepts", tags=["train"])
 async def train_concepts(
@@ -1557,7 +1529,7 @@ async def train_concepts(
             yield "status: \nTraining concepts...\n"
             try:
                 time_start = time.time()
-                for res in app.state.agentmanager.train_concepts(user_id, cncpts):
+                for res in app.state.agentmanager.train_concepts(user_id, cncpts, streaming=streaming):
                     yield res
                 logger.info(
                     str("Train concepts time: " + str(time.time() - time_start))
