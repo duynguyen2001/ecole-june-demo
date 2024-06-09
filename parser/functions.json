@@ -242,14 +242,6 @@
         ],
         "functions": [
             {
-                "name": "add_component_concept",
-                "description": "Adding a component concept relationship between {part} and {first_concept}...",
-                "args": {
-                    "part": "component_concept_name",
-                    "first_concept": "concept_name"
-                }
-            },
-            {
                 "name": "add_examples",
                 "description": "Adding examples of {part}...",
                 "args": {
@@ -266,12 +258,72 @@
                 }
             },
             {
+                "name": "add_component_concept",
+                "description": "Adding a component concept relationship between {part} and {first_concept}...",
+                "args": {
+                    "part": "component_concept_name",
+                    "first_concept": "concept_name"
+                }
+            },
+            {
                 "name": "train_concepts",
                 "description": "Training the model with the new concept {part}...",
                 "args": {
                     "first_concept": "concepts",
                     "second_concept": "concepts",
                     "part": "concepts"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Show me the current knowledge base",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "get_concept_kb",
+                "description": "Rendering the current knowledge base...",
+                "args": {}
+            }
+        ]
+    },
+    {
+        "title": "Undo the last action",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "undo_concept_kb",
+                "description": "Undoing the last action...",
+                "args": {}
+            }
+        ]
+    },
+    {
+        "title": "Show me the checkpoints history",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "get_checkpoint_list",
+                "description": "Rendering the checkpoints history...",
+                "args": {}
+            }
+        ]
+    },
+    {
+        "title": "Revert to a previous checkpoint",
+        "image_required": false,
+        "params": [
+            "checkpoint_id"
+        ],
+        "functions": [
+            {
+                "name": "revert_to_checkpoint",
+                "description": "Reverting to a previous checkpoint...",
+                "args": {
+                    "checkpoint_id": "checkpoint_id"
                 }
             }
         ]

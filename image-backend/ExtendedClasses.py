@@ -1,5 +1,6 @@
 # %%
 import sys
+from asyncio import futures
 from calendar import c
 
 sys.path.append("/shared/nas2/knguye71/ecole-june-demo/ecole_mo9_demo/src")
@@ -65,23 +66,14 @@ class ExtendedController(Controller):
 
         # Ensure features are prepared, only generating those which don't already exist or are dirty
         # Cache all concepts, since we might sample from concepts whose examples haven't been cached yet
-        self.cacher.cache_segmentations(only_uncached_or_dirty=True)
-        self.cacher.cache_features(only_uncached_or_dirty=True)
-
+        logger.info(f"Training concepts over here: {concept_names}")
+        print(f"Training concepts over here: {concept_names}")
         concepts = self.get_markov_blanket(concept_names)
-        # Initialize a pool of workers
-        with ThreadPoolExecutor() as executor:
-            futures = []
-            for concept in concepts:
-                futures.append(executor.submit(
-                    self._train_concept_wrapper, concept.name, **train_concept_kwargs
-                ))
-            for future in futures:
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Error training concept: {e}")
-                    traceback.print_exc()
+        for concept in concepts:
+            logger.info(f"Training concept: {concept.name}\n\n")
+            print(f"Training concept: {concept.name}\n\n")
+            self.train_concept(concept.name, **train_concept_kwargs)
+            # self._train_concept_wrapper(concept.name, **train_concept_kwargs)
 
         logger.info("Training complete.")
         logger.info(
@@ -109,7 +101,8 @@ class ExtendedController(Controller):
         )  # Low retrieval distance to force exact match
 
         logger.info(f'Retrieved concept with name: "{concept.name}"')
-
+        print("concept cuda", concept.predictor.device)
+        print("controller cuda", self.feature_pipeline.feature_extractor.clip.device)
         # Hook to recache zs_attr_features after negative examples have been sampled
         # This is faster than calling recache_zs_attr_features on all examples in the concept_kb
         def cache_hook(examples):
@@ -125,9 +118,10 @@ class ExtendedController(Controller):
                 logger.info(
                     f"No other concepts in the ConceptKB; training concept in isolation for {n_epochs} epochs."
                 )
-            trainer = ConceptKBTrainer(self.concept_kb, self.feature_pipeline)
-            trainer.train_concept(
+
+            self.trainer.train_concept(
                 concept,
+                concepts = [concept],
                 stopping_condition="n_epochs",
                 n_epochs=n_epochs,
                 post_sampling_hook=cache_hook,
@@ -140,19 +134,41 @@ class ExtendedController(Controller):
     ) -> bool:
         return self.heatmap(image, concept_name, only_score_increasing_regions=True)
 
-    def add_examples(
+    def add_examples(self, examples: list[ConceptExample], concept_name: str | None = None, concept: Concept = None) -> ConceptKB:
+        super().add_examples(examples, concept_name, concept)
+        return self.move_to_cpu_and_return_concept_kb()
+
+    def add_concept_examples(
         self,
         examples: list[ConceptExample],
         concept_name: str = None,
-        concept: Concept = None,
     ):
-        super().add_examples(examples, concept_name, concept)
+        try:
+            concept = self.retrieve_concept(concept_name)
+        except Exception as e:
+            logger.info("Concept not found in KB. Adding new concept.")
+            concept = self.add_concept(concept_name, concept = None)
+
+        for example in examples:
+            example.concept_name = concept.name
+
+        self.add_examples(examples, concept=concept, concept_name=None)
         return self.move_to_cpu_and_return_concept_kb()
 
     def add_concept_negatives(
         self, concept_name: str, negatives: list[ConceptExample]
     ) -> ConceptKB:
-        super().add_concept_negatives(concept_name, negatives)
+        concept = None
+        if concept is None:
+            try:
+                concept = self.retrieve_concept(concept_name)
+            except Exception as e:
+                logger.info("Concept not found in KB. Adding new concept.")
+                concept = self.add_concept(concept_name)
+        for example in negatives:
+            example.concept_name = concept.name
+        super().add_concept_negatives(concept.name, negatives)
+
         return self.move_to_cpu_and_return_concept_kb()
 
     #     ############################
@@ -171,11 +187,13 @@ class ExtendedController(Controller):
             self.feature_pipeline.feature_extractor.processor,
         )
         retriever = CLIPConceptRetriever(concept_kb.concepts, model, processor)
+        trainer = ConceptKBTrainer(concept_kb, self.feature_pipeline)
         self.__init__(
             concept_kb,
             self.feature_pipeline,
             retriever=retriever,
             cacher=cacher,
+            trainer=trainer,
         )
         # Free up memory
         gc.collect()

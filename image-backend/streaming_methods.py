@@ -12,6 +12,7 @@ from kb_ops.predict import PredictOutput
 from model.concept.concept_kb import ConceptKB
 from server_utils import (convert_bool_tensor_to_byte_string,
                           convert_PIL_Image_to_base64_string)
+from sympy import false
 
 IMAGE_DIR = os.environ.get(
     "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
@@ -150,7 +151,7 @@ def format_prediction_result(
 ):
     nodes = []
     rev_list = (
-        [rev_dict[name] for name in output["concept_names"]] if rev_dict else None
+        [rev_dict[name] for name in output["concept_names"]] if rev_dict else []
     )
     predicted_label = output.predicted_label
     if predicted_label == "unknown":
@@ -537,7 +538,7 @@ def streaming_is_concept_in_image(
     yield f"""result: {barchart_md_template(concept_scores.tolist(), concept_names, 'Concept Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True)}\n\n"""
 
 
-async def yield_nested_objects(obj: Any, level: int = 1) -> Any:
+def yield_nested_objects(obj: Any, level: int = 1) -> Any:
     """
     Helper function to recursively yield nested objects in markdown format.
     Each yield string starts with "result: " to indicate the start of a new result.
@@ -561,19 +562,19 @@ async def yield_nested_objects(obj: Any, level: int = 1) -> Any:
             if key == "part_masks":
                 continue
             yield f"result: {'#' * level} {key}\n\n"
-            async for msg in yield_nested_objects(value, level + 1):
+            for msg in yield_nested_objects(value, level + 1):
                 yield msg
     elif isinstance(obj, dict):
         for key, value in obj.items():
             if key == "part_masks":
                 continue
             yield f"result: {'#' * level} {key}\n\n"
-            async for msg in yield_nested_objects(value, level + 1):
+            for msg in yield_nested_objects(value, level + 1):
                 yield msg
     elif isinstance(obj, list):
         for idx, element in enumerate(obj):
             yield f"result: {'#' * level} Node {idx}\n\n"
-            async for msg in yield_nested_objects(element, level + 1):
+            for msg in yield_nested_objects(element, level + 1):
                 yield msg
     else:
         try:
@@ -594,18 +595,19 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
     """
     yield f"result: # Concept Knowledge Base\n\n"
     yield f"result: The concept knowledge base contains {len(concept_kb)} concepts.\n\n"
-    concepts = []
+    concepts = {name: {"name": concept.name, "type": "normal"} for name, concept in concept_kb._concepts.items()}
     containing_concepts = []
     component_concepts = []
     for concept_name, concept in concept_kb._concepts.items():
-        concepts.append(concept_name)
         for child in concept.containing_concepts.keys():
-            containing_concepts.append((concept_name, child))
+            containing_concepts.append({"source": concept_name, "target": child, "type": "containing"})
         for component in concept.component_concepts.keys():
-            component_concepts.append((concept_name, component))
+            component_concepts.append({"source": concept_name, "target": component, "type": "component"})
+            if component in concepts:
+                concepts[component]["type"] = "component"
 
     concept_kb_dict = {
-        "concepts": concepts,
+        "concepts": list(concepts.values()),
         "containing_concepts": containing_concepts,
         "component_concepts": component_concepts,
     }
@@ -615,3 +617,18 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
 ```
 """
 
+def streaming_checkpoint_list(checkpoint_list: list[str]) -> Generator[str, None, None]:
+    """
+    Streams the list of checkpoints.
+
+    Args:
+        checkpoint_list (list[str]): The list of checkpoints.
+
+    Yields:
+        Generator[str, None, None]: The generated text.
+    """
+    yield f"result: # Checkpoints\n\n"
+    for idx, checkpoint in enumerate(checkpoint_list):
+        checkpoint_time = checkpoint.strip().split("_")[-1].split(".")[0]
+        yield f"result: ## Checkpoint {idx}\n\n"
+        yield f"result: {checkpoint}\n\n"
