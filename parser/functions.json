@@ -258,14 +258,6 @@
                 }
             },
             {
-                "name": "add_component_concept",
-                "description": "Adding a component concept relationship between {part} and {first_concept}...",
-                "args": {
-                    "part": "component_concept_name",
-                    "first_concept": "concept_name"
-                }
-            },
-            {
                 "name": "train_concepts",
                 "description": "Training the model with the new concept {part}...",
                 "args": {

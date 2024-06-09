@@ -655,7 +655,7 @@ async def add_component_concept(
     user_id: str,  # Required field
     component_concept_name: str,  # Required field
     concept_name: str,  # Required field
-    component_max_retrieval_distance: str = "0",
+    component_max_retrieval_distance: str = "0.7",
     streaming: str = "false",
 ):
     if streaming == "true":
@@ -679,7 +679,7 @@ async def add_component_concept(
                 logger.info(
                     str("Add component concept time: " + str(time.time() - time_start))
                 )
-                yield f"result: {result}"
+                yield f"result: {result}\n\n"
             except Exception as e:
                 import sys
                 import traceback

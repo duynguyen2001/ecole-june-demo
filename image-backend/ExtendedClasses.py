@@ -69,12 +69,30 @@ class ExtendedController(Controller):
         logger.info(f"Training concepts over here: {concept_names}")
         print(f"Training concepts over here: {concept_names}")
         concepts = self.get_markov_blanket(concept_names)
-        for concept in concepts:
-            logger.info(f"Training concept: {concept.name}\n\n")
-            print(f"Training concept: {concept.name}\n\n")
-            self.train_concept(concept.name, **train_concept_kwargs)
-            # self._train_concept_wrapper(concept.name, **train_concept_kwargs)
 
+        for concept in concepts:
+            try:
+                logger.info(f"Training concept: {concept.name}\n\n")
+                print(f"Training concept: {concept.name}\n\n")
+                self.train_concept(concept.name, **train_concept_kwargs)
+                # self._train_concept_wrapper(concept.name, **train_concept_kwargs)
+            except Exception as e:
+                print("+++++++++++++++++++++++++++++++++++++++++++++++")
+                traceback.print_exc()
+                print(sys.exc_info())
+                print(f"Error training concepts: {e}")
+                print("concept device", concept.predictor.device)
+                print(
+                    "controller device",
+                    self.feature_pipeline.feature_extractor.clip.device,
+                )
+                print("concept_kb device", {c.name: c.predictor.device for c in self.concept_kb.concepts})
+                print("cuda device", torch.cuda.current_device())
+                print("cuda device name", torch.cuda.get_device_name())
+                print("cuda device count", torch.cuda.device_count())
+                print("+++++++++++++++++++++++++++++++++++++++++++++++")
+
+                raise e
         logger.info("Training complete.")
         logger.info(
             "current_cuda_device",
