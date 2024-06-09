@@ -1,7 +1,6 @@
 # %%
 
 from dotenv import load_dotenv
-from regex import R
 
 load_dotenv()
 # %%
@@ -18,8 +17,9 @@ from typing import Any, List
 
 import PIL.Image
 import torch
-from ExtendedClasses import (DEFAULT_CKPT, ConceptExample,
-                             ConceptKBFeaturePipeline, ExtendedController)
+from ExtendedClasses import (DEFAULT_CKPT, Concept, ConceptExample,
+                             ConceptKBFeaturePipeline,
+                             ExtendedCLIPConceptRetriever, ExtendedController)
 from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image
 from streaming_methods import (streaming_diff_images, streaming_heatmap,
@@ -73,7 +73,8 @@ from io import BytesIO
 from feature_extraction import build_feature_extractor, build_sam
 from feature_extraction.trained_attrs import N_ATTRS_DINO
 from image_processing import build_localizer_and_segmenter
-from model.concept import ConceptExample, ConceptKB, ConceptKBConfig
+from model.concept import (ConceptExample, ConceptKB, ConceptKBConfig,
+                           concept_kb)
 
 
 class Agent:
@@ -92,23 +93,24 @@ class Agent:
 
         feature_pipeline = ConceptKBFeaturePipeline(loc_and_seg, feature_extractor)
         controller = ExtendedController(default_kb, feature_pipeline)
+        retriever = ExtendedCLIPConceptRetriever(default_kb.concepts, feature_extractor.clip, feature_extractor.processor)
         logger.info(str("Models initialized"))
 
         models = {
             "sam": sam,
             "loc_and_seg": loc_and_seg,
+            "retriever": retriever,
             "feature_extractor": feature_extractor,
             "controller": controller,
         }
         return models
+    
 
     def model_process(
         self, input_queue: Queue, output_queue: Queue, device="cpu"
     ) -> None:
-
-        models = self.initialize_models(
-            device
-        )  # Ensure initialize_models is defined and correctly initializes models based on the cuda device
+        
+        models = self.initialize_models(device)
 
         while True:
             task_id, status, model_key, func_name, args, kwargs = input_queue.get()
@@ -151,6 +153,7 @@ class Agent:
     def call(self, model_key, func_name, *args, **kwargs) -> Any:
         task_id = str(uuid.uuid4())
         status = "processing"
+        
         self.input_queue.put((task_id, status, model_key, func_name, args, kwargs))
 
         while True:
@@ -217,6 +220,7 @@ class AgentManager:
         self.round_robin_queue = deque(self.agents.keys())
         self.concept_kb_dir = concept_kb_dir
         self.default_ckpt = default_ckpt
+        self.cache_kb = {}
         self.checkpoint_path_dict = self.__init_checkpoint_path_dict()
 
     def __init_checkpoint_path_dict(self) -> dict[str, list[str]]:
@@ -252,75 +256,9 @@ class AgentManager:
         self.round_robin_queue.rotate(-1)
         return self.round_robin_queue[0]
 
-    ####################
-    # ConceptKB ops    #
-    ####################
-    def get_concept_kb(self, user_id: str, device: str = "cpu") -> ConceptKB:
-        """
-        This method gets the concept knowledge base (KB) for a user.
-
-        Args:
-            user_id (str): User ID
-            device (str, optional): Device to load the concept KB. Defaults to "cpu".
-
-        Returns:
-            ConceptKB: Concept knowledge base
-        """
-        logger.info(str(f"Getting concept KB for user {user_id}"))
-        if user_id in self.checkpoint_path_dict:
-            concept_kb = ConceptKB.load(self.checkpoint_path_dict[user_id][-1])
-        else:
-            # load default concept kb
-            concept_kb = ConceptKB.load(self.default_ckpt)
-            # save default concept kb
-            os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
-            checkpoint_path = f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
-            concept_kb.save(checkpoint_path)
-            self.checkpoint_path_dict[user_id] = [checkpoint_path]
-
-        # Move concept kb to device
-        concept_kb.to(device=device)
-        logger.info(str(f"Concept KB loaded for user {user_id} to device {device}"))
-        return concept_kb
-
-    def save_concept_kb(self, user_id: str, concept_kb: ConceptKB) -> str:
-        """
-        Save the concept knowledge base (KB) for a user.
-
-        Args:
-            user_id (str): User ID
-            concept_kb (ConceptKB): Concept knowledge base
-
-        Returns:
-            str: Checkpoint path
-        """
-        os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
-        checkpoint_path = f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
-        concept_kb.to("cpu")
-        concept_kb.save(checkpoint_path)
-        if user_id not in self.checkpoint_path_dict:
-            self.checkpoint_path_dict[user_id] = [checkpoint_path]
-        self.checkpoint_path_dict[user_id].append(checkpoint_path)
-        return checkpoint_path
-    
-    def undo_concept_kb(self, user_id: str) -> str:
-        """
-        Undo the last checkpoint of the concept knowledge base (KB) for a user.
-
-        Args:
-            user_id (str): User ID
-
-        Returns:
-            str: Checkpoint path
-        """
-        if user_id in self.checkpoint_path_dict and len(self.checkpoint_path_dict[user_id]) > 1:
-            checkpoint_path = self.checkpoint_path_dict[user_id][-2]
-            if os.path.exists(checkpoint_path):
-                os.remove(self.checkpoint_path_dict[user_id][-1])
-            self.checkpoint_path_dict[user_id].pop()
-            return checkpoint_path
-        else:
-            return "No checkpoint to undo"
+    ###################################
+    # Tasks related to the controller #
+    ###################################
 
     def executeControllerFunctionNoSave(self, user_id: str, func, *args, **kwargs) -> Any:
         """
@@ -408,7 +346,145 @@ class AgentManager:
             gc.collect()  # Explicitly call garbage collector
             # Optionally, you can clear the unused memory from the GPU cache
             torch.cuda.empty_cache()
+ 
+    def executeRetrieverFunction(self, user_id: str, func, *args, **kwargs) -> Any:
+        """
+        Execute a function in the retriever.
 
+        Args:
+            func (): Function to execute
+
+        Raises:
+            Exception: Error in executeRetrieverFunction
+
+        Returns:
+            Any: Function result
+        """
+        agent_key = self.get_next_agent_key()
+        concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
+        try:
+            self.agents[agent_key].call("retriever", "load_kb", concept_kb)
+            return self.agents[agent_key].call("retriever", func, *args, **kwargs)
+        except Exception as e:
+            import sys
+            import traceback
+
+            logger.error(sys.exc_info())
+            logger.error(traceback.format_exc())
+            raise Exception(f"Error in executeRetrieverFunction: {str(e)}")
+    ##################
+    # ConceptKB ops  #
+    ##################
+    def get_concept_kb(self, user_id: str, device: str = "cpu") -> ConceptKB:
+        """
+        This method gets the concept knowledge base (KB) for a user.
+
+        Args:
+            user_id (str): User ID
+            device (str, optional): Device to load the concept KB. Defaults to "cpu".
+
+        Returns:
+            ConceptKB: Concept knowledge base
+        """
+        logger.info(str(f"Getting concept KB for user {user_id}"))
+        
+        if user_id in self.checkpoint_path_dict:
+            concept_kb_path = self.checkpoint_path_dict[user_id][-1]
+            if concept_kb_path in self.cache_kb:
+                concept_kb = self.cache_kb[concept_kb_path]
+            else:
+                concept_kb = ConceptKB.load(concept_kb_path)
+        else:
+            # load default concept kb
+            concept_kb = ConceptKB.load(self.default_ckpt)
+            # save default concept kb
+            os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
+            checkpoint_path = f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
+            concept_kb.save(checkpoint_path)
+            self.checkpoint_path_dict[user_id] = [checkpoint_path]
+            self.cache_kb[checkpoint_path] = concept_kb
+            
+        if len(self.cache_kb) > 10:
+            self.cache_kb.pop(list(self.cache_kb.keys())[0])
+
+        # Move concept kb to device
+        concept_kb.to(device=device)
+        logger.info(str(f"Concept KB loaded for user {user_id} to device {device}"))
+        return concept_kb
+
+    def save_concept_kb(self, user_id: str, concept_kb: ConceptKB) -> str:
+        """
+        Save the concept knowledge base (KB) for a user.
+
+        Args:
+            user_id (str): User ID
+            concept_kb (ConceptKB): Concept knowledge base
+
+        Returns:
+            str: Checkpoint path
+        """
+        os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
+        checkpoint_path = f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
+        concept_kb.to("cpu")
+        concept_kb.save(checkpoint_path)
+        if user_id not in self.checkpoint_path_dict:
+            self.checkpoint_path_dict[user_id] = [checkpoint_path]
+        self.checkpoint_path_dict[user_id].append(checkpoint_path)
+        self.cache_kb[checkpoint_path] = concept_kb
+        return checkpoint_path
+    
+    def undo_kb(self, user_id: str) -> str:
+        """
+        Undo the last checkpoint of the concept knowledge base (KB) for a user.
+
+        Args:
+            user_id (str): User ID
+
+        Returns:
+            str: Checkpoint path
+        """
+        if user_id in self.checkpoint_path_dict and len(self.checkpoint_path_dict[user_id]) > 1:
+            checkpoint_path = self.checkpoint_path_dict[user_id][-2]
+            if os.path.exists(checkpoint_path):
+                os.remove(self.checkpoint_path_dict[user_id][-1])
+            self.checkpoint_path_dict[user_id].pop()
+            return checkpoint_path
+        else:
+            return "No checkpoint to undo"
+
+           
+    def retrieve_concept(self, user_id: str, concept_name: str, max_retrieval_distance: float = 0.5):
+        """
+        
+        """
+        concept_name = concept_name.strip()
+        concept_kb = self.get_concept_kb(user_id)
+        if concept_name in concept_kb:
+            return concept_kb[concept_name]
+
+        elif concept_name.lower() in concept_kb:
+            return concept_kb[concept_name.lower()]
+
+        else:
+            try:
+                
+                retrieved_concept = self.executeRetrieverFunction(user_id, "retrieve", concept_name, 1)[0]
+                logger.info(
+                    f'Retrieved concept "{retrieved_concept.concept.name}" with distance: {retrieved_concept.distance}'
+                )
+                if retrieved_concept.distance > max_retrieval_distance:
+                    logger.info(
+                        f"Retrieved concept distance {retrieved_concept.distance} is greater than max retrieval distance {max_retrieval_distance}. Add new concept to KB."
+                    )
+                return retrieved_concept.concept
+            except Exception as e:
+                import sys
+                import traceback
+
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                raise Exception(f"Error in retrieve_concept: {str(e)}")
+            
     def predict_from_subtree(
         self,
         user_id: str,
@@ -602,18 +678,17 @@ class AgentManager:
         self,
         user_id: str,
         images: list[PIL.Image.Image],
-        concept_name: str | None = None,
+        concept_name: str,
         streaming=False,
     ):
         
         if concept_name is None:
             RuntimeError("Concept name is required")
         
-        concept_kb = self.get_concept_kb(user_id)
-        concept_kb.get_concept(concept_name)
-            
+        concept = self.retrieve_concept(user_id, concept_name)
+
         time_start = time.time()
-        concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
+        concept_examples = self._loc_and_seg_multiple_images(images, concept.name)
 
         print(f"concept_examples: {concept_examples}")
         print(f"concept_name: {concept_name}")
@@ -629,6 +704,7 @@ class AgentManager:
             yield f"status: Add examples successfully time: {time.time() - time_start}"
             yield f"result: {len(concept_examples)} examples added to concept {concept_name}\n\n"
         else:
+            logger.info(f"Add examples successfully time: {time.time() - time_start}")
             return {"status": "success"}
 
     def train_concepts(
@@ -1250,6 +1326,34 @@ async def reset_kb(
         except Exception as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+@app.post("/undo_kb", tags=["kb_ops"])
+def undo_kb(user_id: str, streaming: str = "false"):
+    if streaming == "true":
+        async def streamer(user_id):
+            time_start = time.time()
+            yield "status: Undoing last operation..."
+            try:
+                app.state.agentmanager.undo_kb(user_id)
+                logger.info(str("Undo KB time: " + str(time.time() - time_start)))
+                yield f"result: Last operation undone\n\n"
+            except Exception as e:
+                import sys
+                import traceback
+
+                logger.error(traceback.format_exc())
+                logger.error(sys.exc_info())
+                yield f"error: {str(e)}"
+
+        return StreamingResponse(
+            streamer(user_id),
+            media_type="text/event-stream",
+        )
+    else:
+        try:
+            app.state.agentmanager.undo_kb(user_id)
+            return Response(status_code=200)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
 @app.post("/add_hyponym", tags=["kb_ops"])
 async def add_hyponym(
