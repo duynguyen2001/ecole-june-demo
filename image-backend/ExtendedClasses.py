@@ -162,7 +162,7 @@ class ExtendedController(Controller):
         concept_name: str = None,
     ):
         try:
-            concept = self.retrieve_concept(concept_name)
+            concept = self.retrieve_concept(concept_name, max_retrieval_distance=0.1)
         except Exception as e:
             logger.info("Concept not found in KB. Adding new concept.")
             concept = self.add_concept(concept_name, concept = None)

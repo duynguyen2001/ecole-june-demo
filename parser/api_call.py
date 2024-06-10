@@ -46,7 +46,7 @@ async def _make_request(function_name: str, args: dict[str, str], files: object,
     logger.info(f"Making a request to the image backend API with function {url}, args: {args}, images: {files}")
     
 
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=2000) as client:
         async with client.stream("POST", url, params=args, files=files) as response:
             async for chunk in response.aiter_text():
                 if chunk.startswith("status: "):

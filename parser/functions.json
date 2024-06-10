@@ -3,6 +3,7 @@
         "title": "What is this?",
         "params": [],
         "image_required": true,
+        "type": "question",
         "functions": [
             {
                 "name": "predict_hierarchical",
@@ -16,6 +17,7 @@
     {
         "title": "What kind of {root_concept_name} is this?",
         "image_required": true,
+        "type": "question",
         "params": [
             "root_concept_name"
         ],
@@ -32,6 +34,7 @@
     },
     {
         "title": "Is there a {part_name} in the image?",
+        "type": "question",
         "image_required": true,
         "params": [
             "part_name"
@@ -49,6 +52,7 @@
     },
     {
         "title": "What are the differences between these two images?",
+        "type": "question",
         "image_required": true,
         "params": [],
         "functions": [
@@ -64,6 +68,7 @@
     },
     {
         "title": "Why is this a {class_name}?",
+        "type": "question",
         "image_required": true,
         "params": [
             "class_name"
@@ -84,6 +89,7 @@
     },
     {
         "title": "What are the differences between this and {class_name}?",
+        "type": "question",
         "image_required": true,
         "params": [
             "class_name"
@@ -104,6 +110,7 @@
     },
     {
         "title": "Can you tell me the differences between {first_concept} and {second_concept}?",
+        "type": "question",
         "image_required": false,
         "params": [
             "first_concept",
@@ -122,6 +129,7 @@
     },
     {
         "title": "Why is this a {first_concept}, but not {second_concept}?",
+        "type": "question",
         
         "image_required": true,
         "params": [
@@ -145,6 +153,7 @@
     },
     {
         "title": "This is a {class_name}",
+        "type": "training",
         "image_required": true,
         "params": [
             "class_name"
@@ -167,39 +176,10 @@
             }
         ]
     },
-    {
-        "title": "Reset the backend from scratch",
-        "image_required": false,
-        "params": [],
-        "functions": [
-            {
-                "name": "reset_kb",
-                "description": "Resetting the backend from scratch...",
-                "args": {},
-                "extra_args": {
-                    "clear_all": "true"
-                }
-            }
-        ]
-    },
-    {
-        "title": "Reset the backend from checkpoint",
-        "image_required": false,
-        "params": [],
-        "functions": [
-            {
-                "name": "reset_kb",
-                "description": "Resetting the backend from checkpoint...",
-                "args": {},
-                "extra_args": {
-                    "clear_all": "false"
-                }
-            }
-        ]
-    },
-   
+    
     {
         "title": "This is a {child_class_name}, a type of {parent_class_name}",
+        "type": "training",
         "image_required": true,
         "params": [
             "child_class_name",
@@ -224,6 +204,7 @@
             },
             {
                 "name": "train_concepts",
+                "type": "training",
                 "description": "Training the model with the new concept {child_class_name} and {parent_class_name}...",
                 "args": {
                     "child_class_name": "concepts",
@@ -233,25 +214,34 @@
         ]
     },
     {
-        "title": "This is a {part}. {first_concept} has {part_name}, but {second_concept} does not.",
+        "title": "This is a {part_name}. {first_concept} has {part_name}, but {second_concept} does not.",
+        "type": "training",
         "image_required": true,
         "params": [
-            "part",
+            "part_name",
             "first_concept",
             "second_concept"
         ],
         "functions": [
             {
                 "name": "add_examples",
-                "description": "Adding examples of {part}...",
+                "description": "Adding examples of {part_name}...",
                 "args": {
                     "images": "images",
-                    "part": "concept_name"
+                    "part_name": "concept_name"
+                }
+            },
+            {
+                "name": "add_component_concept",
+                "description": "Adding a component concept relationship between {part_name} and {first_concept}...",
+                "args": {
+                    "part_name": "component_concept_name",
+                    "first_concept": "concept_name"
                 }
             },
             {
                 "name": "add_concept_negatives",
-                "description": "Adding negative examples of {part}...",
+                "description": "Adding negative examples of {part_name} to {second_concept}...",
                 "args": {
                     "images": "images",
                     "second_concept": "concept_name"
@@ -259,11 +249,46 @@
             },
             {
                 "name": "train_concepts",
-                "description": "Training the model with the new concept {part}...",
+                "description": "Training the model with the new concept {part_name}...",
                 "args": {
                     "first_concept": "concepts",
                     "second_concept": "concepts",
-                    "part": "concepts"
+                    "part_name": "concepts"
+                }
+            }
+        ]
+    },
+    {
+        "title": "There are {part_name}. The {class_name} has a components of {part_name}",
+        "type": "training",
+        "image_required": true,
+        "params": [
+            "part_name",
+            "class_name"
+        ],
+        "functions": [
+            {
+                "name": "add_examples",
+                "description": "Adding examples of {part_name}...",
+                "args": {
+                    "images": "images",
+                    "part_name": "concept_name"
+                }
+            },
+            {
+                "name": "add_component_concept",
+                "description": "Adding a component concept relationship between {part_name} and {class_name}...",
+                "args": {
+                    "part_name": "component_concept_name",
+                    "class_name": "concept_name"
+                }
+            },
+            {
+                "name": "train_concepts",
+                "description": "Training the model with the new concept {part_name}...",
+                "args": {
+                    "part_name": "concepts",
+                    "class_name": "concepts"
                 }
             }
         ]
@@ -276,18 +301,6 @@
             {
                 "name": "get_concept_kb",
                 "description": "Rendering the current knowledge base...",
-                "args": {}
-            }
-        ]
-    },
-    {
-        "title": "Undo the last action",
-        "image_required": false,
-        "params": [],
-        "functions": [
-            {
-                "name": "undo_concept_kb",
-                "description": "Undoing the last action...",
                 "args": {}
             }
         ]
@@ -316,6 +329,51 @@
                 "description": "Reverting to a previous checkpoint...",
                 "args": {
                     "checkpoint_id": "checkpoint_id"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Undo the last action",
+        "type": "training",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "undo_concept_kb",
+                "description": "Undoing the last action...",
+                "args": {}
+            }
+        ]
+    },
+    {
+        "title": "Reset the backend from scratch",
+        "type": "training",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "reset_kb",
+                "description": "Resetting the backend from scratch...",
+                "args": {},
+                "extra_args": {
+                    "clear_all": "true"
+                }
+            }
+        ]
+    },
+    {
+        "title": "Reset the backend from checkpoint",
+        "type": "training",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "reset_kb",
+                "description": "Resetting the backend from checkpoint...",
+                "args": {},
+                "extra_args": {
+                    "clear_all": "false"
                 }
             }
         ]

@@ -12,6 +12,10 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import List
 
+import torch
+
+torch.autograd.set_detect_anomaly(True)
+
 import PIL.Image
 from agent_manager import IMAGE_DIR, TENSOR_DIR, AgentManager
 ################
@@ -903,6 +907,7 @@ async def train_concepts(
             try:
                 time_start = time.time()
                 for res in app.state.agentmanager.train_concepts(user_id, cncpts, streaming=streaming):
+                    logger.info(res)
                     yield res
                 logger.info(
                     str("Train concepts time: " + str(time.time() - time_start))
