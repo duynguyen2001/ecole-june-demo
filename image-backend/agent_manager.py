@@ -448,6 +448,7 @@ class AgentManager:
             if os.path.exists(checkpoint_path):
                 os.remove(self.checkpoint_path_dict[user_id][-1])
             self.checkpoint_path_dict[user_id].pop()
+            self.cache_kb[user_id] = ConceptKB.load(checkpoint_path)
             return checkpoint_path
         else:
             return "No checkpoint to undo"
@@ -681,7 +682,7 @@ class AgentManager:
 
             path = os.path.join(save_log_and_seg_concept_dir, new_id + ".pkl")
             with open(path, "wb") as f:
-                pickle.dump(loc_seg_output.cpu(detach=True), f)
+                pickle.dump(loc_seg_output.cpu(), f)
             logger.info(
                 str("Loc and seg single image time: " + str(time.time() - time_start))
             )

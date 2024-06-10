@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
-from transformers import pipeline
-from dotenv import load_dotenv
-from utils import streaming_response_yield, streaming_response_end, match_template, strip_tokens, get_last_user_input
-from model.Counter import Counter
 from api_call import make_requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from model.Counter import Counter
+from transformers import pipeline
+from utils import (get_last_user_input, match_template, streaming_response_end,
+                   streaming_response_yield, strip_tokens)
 
 load_dotenv()
 app = FastAPI()
@@ -126,7 +127,29 @@ async def generate_text(request: Request) -> None:
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.get("/health")
+def health():
+    """
+    Health check endpoint.
 
+    Returns:
+        dict: The health check response.
+    """
+    return {"status": "healthy"}
+import json
+
+
+@app.get("/commands")
+def commands():
+    """
+    Return the list of available commands.
+
+    Returns:
+        dict: The list of available commands.
+    """
+    with open("/shared/nas2/knguye71/ecole-june-demo/parser/functions.json") as f:
+        commands = json.load(f)
+    return JSONResponse(content=commands)
 # Run the server using uvicorn
 if __name__ == "__main__":
     import uvicorn
