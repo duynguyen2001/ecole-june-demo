@@ -36,7 +36,7 @@ def sigmoid(x) -> float:
     return 1 / (1 + math.exp(-x))
 
 
-def correct_grammar(sentence: str)  -> str:
+def correct_grammar(sentence: str) -> str:
     return sentence
     # blob = TextBlob(sentence)
     # return str(blob.correct())
@@ -134,15 +134,18 @@ def image_with_mask_md_template(
 ):
     image_id = upload_image_and_return_id(image)
     mask_id = upload_binary_tensor_and_return_id(mask)
+    ret_json = {
+        "image": image_id,
+        "mask": mask_id,
+        "general_attributes": general_attributes,
+        "general_attributes_for_image": general_attributes_image,
+    }
     return f"""
 ```image-with-mask
-{{
-  "image": "{image_id}",
-  "mask": "{mask_id}",
-  "general_attributes": {general_attributes},
-  "general_attributes_for_image": {general_attributes_image}
-}}
+{json.dumps(ret_json, indent=0)}
 ```
+
+
 """
 
 
@@ -150,9 +153,7 @@ def format_prediction_result(
     output: PredictOutput, rev_dict: dict | None = None, top_k: int = 5
 ):
     nodes = []
-    rev_list = (
-        [rev_dict[name] for name in output["concept_names"]] if rev_dict else []
-    )
+    rev_list = [rev_dict[name] for name in output["concept_names"]] if rev_dict else []
     predicted_label = output.predicted_label
     if predicted_label == "unknown":
         return "I do not know what object is in the image\n\n"
@@ -249,7 +250,10 @@ def format_prediction_result(
 
 
 async def streaming_hierachical_predict_result(
-    output: dict, sigmoided: bool = True, streaming_subclass: bool = False
+    output: dict,
+    sigmoided: bool = True,
+    streaming_subclass: bool = False,
+    show_explanation=True,
 ):
     """
     Implements:
@@ -271,46 +275,48 @@ async def streaming_hierachical_predict_result(
             yield correct_grammar(
                 f'result: The object in the image is a "{predicted_label}"\n\n'
             )
+    if show_explanation:
+        # stream prediction path
+        if prediction_path := output.get("prediction_path"):
+            # build a de
+            rev_dict = {}
+            decision_tree = []
+            nodes = []
+            concept_path = output.get("concept_path")
 
-    # stream prediction path
-    if prediction_path := output.get("prediction_path"):
-        # build a de
-        rev_dict = {}
-        decision_tree = []
-        nodes = []
-        concept_path = output.get("concept_path")
-
-        for i, pred in enumerate(prediction_path):
-            sorted_data = sorted(
-                zip(pred["concept_names"], pred["predictors_scores"].tolist()),
-                key=lambda x: x[1],
-                reverse=True,
-            )
-
-            for concept_name, concept_score in sorted_data:
-                rev_dict[concept_name] = str(uuid.uuid4())
-                decision_tree.append(
-                    {
-                        "concept_name": concept_name,
-                        "score": sigmoid(concept_score) if sigmoided else concept_score,
-                        "parent": concept_path[i - 1] if i > 0 else "root",
-                        "id": rev_dict[concept_name] if i > 0 else "root",
-                    }
+            for i, pred in enumerate(prediction_path):
+                sorted_data = sorted(
+                    zip(pred["concept_names"], pred["predictors_scores"].tolist()),
+                    key=lambda x: x[1],
+                    reverse=True,
                 )
-            best_node = sorted_data[0]
-            nodes.append(f"""result: ### {best_node[0]}\n\n""")
-            nodes.extend(
-                [
-                    f"result: {res}"
-                    for res in format_prediction_result(pred, rev_dict)
-                    if res
-                ]
-            )
 
-        yield "result: " + decision_tree_md_template(decision_tree) + "\n\n"
-        # stream nodes
-        for node in nodes:
-            yield node
+                for concept_name, concept_score in sorted_data:
+                    rev_dict[concept_name] = str(uuid.uuid4())
+                    decision_tree.append(
+                        {
+                            "concept_name": concept_name,
+                            "score": (
+                                sigmoid(concept_score) if sigmoided else concept_score
+                            ),
+                            "parent": concept_path[i - 1] if i > 0 else "root",
+                            "id": rev_dict[concept_name] if i > 0 else "root",
+                        }
+                    )
+                best_node = sorted_data[0]
+                nodes.append(f"""result: ### {best_node[0]}\n\n""")
+                nodes.extend(
+                    [
+                        f"result: {res}"
+                        for res in format_prediction_result(pred, rev_dict)
+                        if res
+                    ]
+                )
+
+            yield "result: " + decision_tree_md_template(decision_tree) + "\n\n"
+            # stream nodes
+            for node in nodes:
+                yield node
 
 
 def image_block(images: PIL.Image.Image, names: list[str] = []):
@@ -583,6 +589,7 @@ def yield_nested_objects(obj: Any, level: int = 1) -> Any:
         except (TypeError, OverflowError):
             yield f"result: {str(obj)}\n\n"
 
+
 def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
     """
     Streams the concept knowledge base.
@@ -595,14 +602,21 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
     """
     yield f"result: # Concept Knowledge Base\n\n"
     yield f"result: The concept knowledge base contains {len(concept_kb)} concepts.\n\n"
-    concepts = {name: {"name": concept.name, "type": "normal"} for name, concept in concept_kb._concepts.items()}
+    concepts = {
+        name: {"name": concept.name, "type": "normal"}
+        for name, concept in concept_kb._concepts.items()
+    }
     containing_concepts = []
     component_concepts = []
     for concept_name, concept in concept_kb._concepts.items():
         for child in concept.containing_concepts.keys():
-            containing_concepts.append({"source": concept_name, "target": child, "type": "containing"})
+            containing_concepts.append(
+                {"source": concept_name, "target": child, "type": "containing"}
+            )
         for component in concept.component_concepts.keys():
-            component_concepts.append({"source": concept_name, "target": component, "type": "component"})
+            component_concepts.append(
+                {"source": concept_name, "target": component, "type": "component"}
+            )
             if component in concepts:
                 concepts[component]["type"] = "component"
 
@@ -616,6 +630,7 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
 {json.dumps(concept_kb_dict, indent=4)}
 ```
 """
+
 
 def streaming_checkpoint_list(checkpoint_list: list[str]) -> Generator[str, None, None]:
     """

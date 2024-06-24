@@ -15,6 +15,24 @@
         ]
     },
     {
+        "title": "Why is that?",
+        "params": [],
+        "image_required": true,
+        "type": "question",
+        "functions": [
+            {
+                "name": "predict_hierarchical",
+                "description": "Predicting the most likely concept from the image...",
+                "args": {
+                    "image": "image"
+                },
+                    "extra_args": {
+                        "show_explanation": "true"
+                    }
+            }
+        ]
+    },
+    {
         "title": "What kind of {root_concept_name} is this?",
         "image_required": true,
         "type": "question",
@@ -214,6 +232,41 @@
         ]
     },
     {
+        "title": "There are {part_name}. The {class_name} has a components of {part_name}",
+        "type": "training",
+        "image_required": true,
+        "params": [
+            "part_name",
+            "class_name"
+        ],
+        "functions": [
+            {
+                "name": "add_examples",
+                "description": "Adding examples of {part_name}...",
+                "args": {
+                    "images": "images",
+                    "part_name": "concept_name"
+                }
+            },
+            {
+                "name": "add_component_concept",
+                "description": "Adding a component concept relationship between {part_name} and {class_name}...",
+                "args": {
+                    "part_name": "component_concept_name",
+                    "class_name": "concept_name"
+                }
+            },
+            {
+                "name": "train_concepts",
+                "description": "Training the model with the new concept {part_name}...",
+                "args": {
+                    "part_name": "concepts",
+                    "class_name": "concepts"
+                }
+            }
+        ]
+    },
+    {
         "title": "This is a {part_name}. {first_concept} has {part_name}, but {second_concept} does not.",
         "type": "training",
         "image_required": true,
@@ -254,41 +307,6 @@
                     "first_concept": "concepts",
                     "second_concept": "concepts",
                     "part_name": "concepts"
-                }
-            }
-        ]
-    },
-    {
-        "title": "There are {part_name}. The {class_name} has a components of {part_name}",
-        "type": "training",
-        "image_required": true,
-        "params": [
-            "part_name",
-            "class_name"
-        ],
-        "functions": [
-            {
-                "name": "add_examples",
-                "description": "Adding examples of {part_name}...",
-                "args": {
-                    "images": "images",
-                    "part_name": "concept_name"
-                }
-            },
-            {
-                "name": "add_component_concept",
-                "description": "Adding a component concept relationship between {part_name} and {class_name}...",
-                "args": {
-                    "part_name": "component_concept_name",
-                    "class_name": "concept_name"
-                }
-            },
-            {
-                "name": "train_concepts",
-                "description": "Training the model with the new concept {part_name}...",
-                "args": {
-                    "part_name": "concepts",
-                    "class_name": "concepts"
                 }
             }
         ]

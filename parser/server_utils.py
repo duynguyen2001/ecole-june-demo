@@ -146,7 +146,7 @@ def strip_tokens(
     return split_by_role
 
 
-def get_last_user_input(conversations):
+def get_last_user_input(conversations, skip =0):
     """
     Get the last user input from the conversation.
     For example, given the conversation:
@@ -157,9 +157,12 @@ def get_last_user_input(conversations):
     ]
     return "How are you?"
     """
+    skipped = 0
     for conv in reversed(conversations):
         if conv["role"] == "user":
-            return conv
+            if skipped == skip:
+                return conv
+            skipped += 1
     return None
 
 

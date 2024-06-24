@@ -3,9 +3,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from model.Counter import Counter
+from server_utils import (get_last_user_input, match_template,
+                          streaming_response_end, streaming_response_yield,
+                          strip_tokens)
 from transformers import pipeline
-from utils import (get_last_user_input, match_template, streaming_response_end,
-                   streaming_response_yield, strip_tokens)
 
 load_dotenv()
 app = FastAPI()
@@ -62,14 +63,14 @@ async def generate_text(request: Request) -> None:
         Yields:
             str: The generated text. In format "data: {json}\n\n".
         """
-        
+
         # Initialize the counter
         counter = Counter()
-        
+
         # Matching the last input prompt with a template
         prompt = last_input["prompt"]
         obj = match_template(generator, prompt)
-        
+
         # Get the template title, parameters, functions, and image_required flag
         template_title = obj["template_title"]
         params = obj["params"]
@@ -78,24 +79,34 @@ async def generate_text(request: Request) -> None:
 
         # Check if the template requires an image and if there is an image in the last input
         if image_required and len(last_input["images"]) == 0:
-            yield streaming_response_end(
-                "Sorry, but you forgot to input an image", counter
-            )
-            return
+            second_last_user_input = get_last_user_input(conversations, 1)
+            if second_last_user_input is not None and len(second_last_user_input["images"]) > 0:
+                last_input["images"] = second_last_user_input["images"]
+                res_str = "Processing...\n\n"
+            else:
+                third_last_user_input = get_last_user_input(conversations, 2)
+                if third_last_user_input is not None and len(third_last_user_input["images"]) > 0:
+                    last_input["images"] = third_last_user_input["images"]
+                    res_str = "Processing...\n\n"
+                else:
+                    yield streaming_response_end(
+                        "Sorry, but you forgot to input an image", counter
+                    )
+                
         elif template_title is not None:
             # Show status message
             res_str = "Processing...\n\n"
         else:
             # if there is no template, just generate text
             llm_res = generator(prompt, max_length=50, num_return_sequences=1)
-            res_str += llm_res[0]["generated_text"]
+            res_str = llm_res[0]["generated_text"]
 
         # yield the status message
         yield streaming_response_yield(res_str, counter)
 
         # Initialize the last response string
         last_res_str = ""
-        
+
         # Update the last response string with the new chunk function
         def update_last_stream(chunk):
             nonlocal last_res_str
@@ -107,7 +118,7 @@ async def generate_text(request: Request) -> None:
                 functions, params, last_input["images"], userId, callback = update_last_stream
             ):
                 yield response
-        
+
         # yield the final response string, this will be the final response, only happens when all the APIs have been called successfully
         yield streaming_response_end(last_res_str, counter)
 
