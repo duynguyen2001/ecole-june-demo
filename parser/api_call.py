@@ -4,8 +4,9 @@ from typing import AsyncGenerator, List
 
 import httpx
 from model.Counter import Counter
-from utils import (convert_base64_to_upload_file, streaming_response_end,
-                   streaming_response_yield, substitute_brackets)
+from server_utils import (convert_base64_to_upload_file,
+                          streaming_response_end, streaming_response_yield,
+                          substitute_brackets)
 
 logger = logging.getLogger("uvicorn.error")
 

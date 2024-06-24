@@ -142,12 +142,13 @@ async def predict_hierarchical(
     unk_threshold: str = "0.7",
     include_component_concepts: str = "False",
     streaming: str = "false",
+    show_explanation: str = "false"
 ):
     logger.info(f"streaming: {streaming}")
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB")
 
-        async def streamer(img, unk_threshold, include_component_concepts):
+        async def streamer(img, unk_threshold, include_component_concepts, show_explain):
             time_start = time.time()
             # Convert to PIL Image
 
@@ -170,7 +171,8 @@ async def predict_hierarchical(
                 )
                 # async for msg in yield_nested_objects(result):
                 #     yield msg
-                async for msg in streaming_hierachical_predict_result(result):
+                show_exp = (show_explain == "true")
+                async for msg in streaming_hierachical_predict_result(result, show_explanation=show_exp):
                     yield msg
                 # yield f"result: {json.dumps(result)}"
             except Exception as e:
@@ -182,7 +184,7 @@ async def predict_hierarchical(
                 yield f"error: {str(e)}"
 
         return StreamingResponse(
-            streamer(img, unk_threshold, include_component_concepts),
+            streamer(img, unk_threshold, include_component_concepts, show_explanation),
             media_type="text/event-stream",
         )
     else:
