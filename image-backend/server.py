@@ -174,6 +174,8 @@ async def predict_hierarchical(
                 show_exp = (show_explain == "true")
                 async for msg in streaming_hierachical_predict_result(result, show_explanation=show_exp):
                     yield msg
+                # for msg in yield_nested_objects(result):
+                #     yield msg
                 # yield f"result: {json.dumps(result)}"
             except Exception as e:
                 import sys

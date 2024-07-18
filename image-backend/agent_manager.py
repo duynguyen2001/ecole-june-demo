@@ -132,6 +132,7 @@ class Agent:
                 logger.error(sys.exc_info())
                 logger.error(traceback.format_exc())
                 output_queue.put((task_id, "error", str(e)))
+                raise e
                 
 
     def __init__(self, device) -> None:
@@ -287,10 +288,11 @@ class AgentManager:
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
-            raise Exception(f"Error in executeControllerFunctionNoSave: {str(e)}")
+            raise e
         finally:
             if concept_kb is not None:
-                concept_kb.to("cpu")
+                for concept in concept_kb:
+                    concept.predictor.to("cpu")
                 gc.collect()  # Explicitly call garbage collector
                 # Optionally, you can clear the unused memory from the GPU cache
                 torch.cuda.empty_cache()
@@ -327,14 +329,16 @@ class AgentManager:
             )
 
             # move concept kb to cpu
-            concept_kb.to("cpu")
+            for concept in concept_kb:
+                concept.predictor.to("cpu")
             ckpt_path = self.save_concept_kb(user_id, concept_kb)
             return ckpt_path
         except Exception as e:
             # General exception handling for any unexpected errors
             logger.error(sys.exc_info())
             logger.error(traceback.format_exc())
-            raise Exception(f"Error in executeControllerFunctionWithSave: {str(e)}")
+            # raise Exception(f"Error in executeControllerFunctionWithSave: {str(e)}")
+            raise e
         finally:
             gc.collect()  # Explicitly call garbage collector
             # Optionally, you can clear the unused memory from the GPU cache
@@ -358,13 +362,16 @@ class AgentManager:
         try:
             self.agents[agent_key].call("retriever", "load_kb", concept_kb)
             result = self.agents[agent_key].call("retriever", func, *args, **kwargs)
-            concept_kb.to("cpu")
+
+            for concept in concept_kb:
+                concept.predictor.to("cpu")
             return result
         except Exception as e:
 
             logger.error(sys.exc_info())
             logger.error(traceback.format_exc())
-            raise Exception(f"Error in executeRetrieverFunction: {str(e)}")
+            # raise Exception(f"Error in executeRetrieverFunction: {str(e)}")
+            raise e
 
     ##################
     # ConceptKB ops  #
@@ -404,7 +411,9 @@ class AgentManager:
             self.cache_kb.pop(list(self.cache_kb.keys())[0])
 
         # Move concept kb to device
-        concept_kb.to(device=device)
+
+        for concept in concept_kb:
+            concept.predictor.to(device)
         return concept_kb
 
     def save_concept_kb(self, user_id: str, concept_kb: ConceptKB) -> str:
@@ -422,7 +431,9 @@ class AgentManager:
         checkpoint_path = (
             f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
         )
-        concept_kb.to("cpu")
+
+        for concept in concept_kb:
+            concept.predictor.to("cpu")
         concept_kb.save(checkpoint_path)
         if user_id not in self.checkpoint_path_dict:
             self.checkpoint_path_dict[user_id] = [checkpoint_path]
@@ -497,7 +508,8 @@ class AgentManager:
 
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
-                raise Exception(f"Error in retrieve_concept: {str(e)}")
+                # raise Exception(f"Error in retrieve_concept: {str(e)}")
+                raise e
 
     def predict_from_subtree(
         self,
@@ -628,7 +640,9 @@ class AgentManager:
                     n_trained_attrs=N_ATTRS_DINO,
                 )
             )
-            concept_kb.to("cpu")
+
+            for concept in concept_kb:
+                concept.predictor.to("cpu")
         else:
             concept_kb = ConceptKB.load(self.default_ckpt)
 
@@ -732,7 +746,7 @@ class AgentManager:
         )
 
         if streaming:
-            yield f"status: Add examples successfully time: {time.time() - time_start}"
+            yield f"status: Added examples in {(time.time() - time_start): .2f}s\n\n"
             yield f"result: {len(concept_examples)} examples added to concept {concept_name}\n\n"
         else:
             logger.info(f"Add examples successfully time: {time.time() - time_start}")
@@ -754,8 +768,8 @@ class AgentManager:
                     user_id, "train_concepts", concept_names, **train_concept_kwargs
                 )
                 yield f"status: Training completed\n\n"
-                yield f"status: Total time for training {len(concept_names)} concepts: {time.time() - time_start}"
-                yield f"result: Training successfully with {len(concept_names)} concepts\n\n"
+                yield f"status: Total time for training  concepts: {time.time() - time_start}"
+                yield f"result: Trained concept(s) successfully\n\n"
             else:
                 self.executeControllerFunctionWithSave(
                     user_id, "train_concepts", concept_names, **train_concept_kwargs
@@ -765,7 +779,8 @@ class AgentManager:
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
-            raise Exception(f"Error in train_concepts: {str(e)}")
+            # raise Exception(f"Error in train_concepts: {str(e)}")
+            raise e
 
     def get_zs_attributes(self, user_id: str, concept_name: str):
         return self.executeControllerFunctionNoSave(
