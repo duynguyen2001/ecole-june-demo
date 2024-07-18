@@ -609,7 +609,7 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
     containing_concepts = []
     component_concepts = []
     for concept_name, concept in concept_kb._concepts.items():
-        for child in concept.containing_concepts.keys():
+        for child in concept.child_concepts.keys():
             containing_concepts.append(
                 {"source": concept_name, "target": child, "type": "containing"}
             )
@@ -627,8 +627,9 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
     }
 
     yield f"""result: ```concept-graph
-{json.dumps(concept_kb_dict, indent=4)}
+{json.dumps(concept_kb_dict, indent=0)}
 ```
+
 """
 
 
