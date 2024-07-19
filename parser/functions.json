@@ -85,7 +85,7 @@
         ]
     },
     {
-        "title": "Why is this a {class_name}?",
+        "title": "Why do you think this is a {class_name}?",
         "type": "question",
         "image_required": true,
         "params": [
