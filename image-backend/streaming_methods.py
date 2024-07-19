@@ -195,6 +195,10 @@ def format_prediction_result(
                     reverse=True,
                 )[:top_k]
             )
+            # filter only the score greater than 0.5
+            region_general_attribute_mask = {
+                k: v for k, v in region_general_attribute_mask.items() if v > 0.5
+            }
 
             region_general_attributes.append(region_general_attribute_mask)
 
@@ -205,6 +209,11 @@ def format_prediction_result(
                 :top_k
             ]
         )
+        # filter only the score greater than 0.5
+        img_trained_attr_scores = {
+            k: v for k, v in img_trained_attr_scores.items() if v > 0.5
+        }
+        
     nodes.append(
         image_with_mask_md_template(
             segmentations["input_image"],
