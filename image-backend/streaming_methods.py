@@ -197,7 +197,7 @@ def format_prediction_result(
             )
             # filter only the score greater than 0.5
             region_general_attribute_mask = {
-                k: v for k, v in region_general_attribute_mask.items() if v > 0.5
+                k: v for k, v in region_general_attribute_mask.items() if v >= 0.6
             }
 
             region_general_attributes.append(region_general_attribute_mask)
@@ -211,7 +211,7 @@ def format_prediction_result(
         )
         # filter only the score greater than 0.5
         img_trained_attr_scores = {
-            k: v for k, v in img_trained_attr_scores.items() if v > 0.5
+            k: v for k, v in img_trained_attr_scores.items() if v >= 0.6
         }
         
     nodes.append(
