@@ -173,7 +173,7 @@ def format_prediction_result(
     if predicted_concept_components_to_scores:
         component_concept_scores = predicted_concept_components_to_scores.values()
         component_concept_names = predicted_concept_components_to_scores.keys()
-    predicted_concept_components_heatmaps = output.predicted_concept_compoents_heatmaps
+    predicted_concept_components_heatmaps = output.predicted_concept_components_heatmaps
     component_concept_heatmaps = None
     if predicted_concept_components_heatmaps:
         component_concept_heatmaps = list(

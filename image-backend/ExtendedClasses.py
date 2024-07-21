@@ -106,7 +106,7 @@ class ExtendedController(Controller):
         # Get heatmap visualizations for each concept components in the prediction path
         for pred in prediction_path:
             component_concepts = pred.predicted_concept_components_to_scores.keys()
-            pred.predicted_concept_compoents_heatmaps = {
+            pred.predicted_concept_components_heatmaps = {
                 concept: self.heatmap(image, concept) for concept in component_concepts
             }
 
@@ -137,7 +137,7 @@ class ExtendedController(Controller):
         # Get heatmap visualizations for each concept components in the prediction path
         for pred in prediction_path:
             component_concepts = pred.predicted_concept_components_to_scores.keys()
-            pred.predicted_concept_compoents_heatmaps = {
+            pred.predicted_concept_components_heatmaps = {
                 concept: self.heatmap(image, concept) for concept in component_concepts
             }
 
@@ -370,12 +370,17 @@ class ExtendedController(Controller):
         feature_pipeline = ConceptKBFeaturePipeline(None, None)
         trainer = ConceptKBTrainer(self.concept_kb, feature_pipeline)
         ret_concept_lst = []
+        i = 0
         while concept_selector.num_concepts_remaining > 0:
             concept = concept_selector.get_next_concept()
 
             if concept is None:
-                print("No current concept to train")
-                time.sleep(0.1)
+                print(
+                    "No current concept to train : ",
+                    concept_selector.num_concepts_remaining,
+                    i,
+                )
+                time.sleep(1)
                 continue
 
             examples, dataset = self.trainer.construct_dataset_for_concept_training(
