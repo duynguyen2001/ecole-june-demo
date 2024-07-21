@@ -372,16 +372,15 @@ class ExtendedController(Controller):
         ret_concept_lst = []
         i = 0
         while concept_selector.num_concepts_remaining > 0:
-            concept = concept_selector.get_next_concept()
-
-            if concept is None:
+            if not concept_selector.has_concept_available():
                 print(
                     "No current concept to train : ",
                     concept_selector.num_concepts_remaining,
                     i,
                 )
-                time.sleep(1)
+                time.sleep(5)
                 continue
+            concept = concept_selector.get_next_concept()
 
             examples, dataset = self.trainer.construct_dataset_for_concept_training(
                 concept, use_concepts_as_negatives=use_concepts_as_negatives
