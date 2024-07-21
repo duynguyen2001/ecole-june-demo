@@ -374,6 +374,8 @@ class ExtendedController(Controller):
             concept = concept_selector.get_next_concept()
 
             if concept is None:
+                print("No current concept to train")
+                time.sleep(0.1)
                 continue
 
             examples, dataset = self.trainer.construct_dataset_for_concept_training(
