@@ -1,9 +1,11 @@
 # %%
 import sys
+from multiprocessing import process
 
 import torch.multiprocessing as mp
 
 sys.path.append("/shared/nas2/knguye71/ecole-june-demo/ecole_mo9_demo/src")
+import copy
 import cProfile
 import gc
 import logging
@@ -13,7 +15,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from typing import Literal
+from typing import Optional
 
 # from feature_extraction.trained_attrs import N_ATTRS_SUBSET
 import PIL.Image
@@ -41,33 +43,36 @@ logger = logging.getLogger("uvicorn.access")
 
 
 def train_wrapper(
-    concept_kb: ConceptKB,
+    trainer: ConceptKBTrainer,
     concept,
-    train_ds,
+    examples,
+    dataset,
+    concept_selector,
     n_epochs=5,
     use_concepts_as_negatives=True,
     device="cpu",
-    **train_kwargs,
+    **train_concept_kwargs,
 ):
     try:
         logger.info(f"Training concept: {concept.name}\n\n")
         print(f"Training concept: {concept.name}\n\n")
-        feature_pipeline = ConceptKBFeaturePipeline(None, None)
-        trainer = ConceptKBTrainer(concept_kb, feature_pipeline)
         # Hook to recache zs_attr_features after negative examples have been sampled
         # This is faster than calling recache_zs_attr_features on all examples in the concept_kb
-        for concept in concept_kb.concepts:
-            concept.predictor.to(device)
+        train_concept = copy.deepcopy(concept)
+        train_concept.predictor.to(device)
         # Train for fixed number of epochs
-        train_kwargs = train_kwargs.copy()
-        train_kwargs.update({
-            'ckpt_dir': None,
-            'concepts': [concept],
-            'lr': train_kwargs.get('lr', 1e-2)
-        })
-        results = trainer.train(train_ds, None, n_epochs=n_epochs, **train_kwargs)
-        concept.predictor.to("cpu")
-        return results
+        train_kwargs = train_concept_kwargs.copy()
+        trainer.train_concept(
+            train_concept,
+            samples_and_dataset=(examples, dataset),
+            n_epochs=n_epochs,
+            **train_kwargs,
+        )
+        train_concept.predictor.to("cpu")
+        # ret_concept_lst.append(train_concept)
+        trainer.concept_kb._concepts[train_concept.name] = train_concept
+        # list_concepts_to_train.remove(concept)
+        concept_selector.mark_concept_completed(concept)
     except Exception as e:
         print("+++++++++++++++++++++++++++++++++++++++++++++++")
         traceback.print_exc()
@@ -81,9 +86,9 @@ def train_wrapper(
 
         raise e
     finally:
-        for concept in concept_kb:
-            concept.predictor.to("cpu")
         torch.cuda.empty_cache()
+
+
 class ExtendedController(Controller):
 
     def predict_hierarchical(
@@ -154,10 +159,9 @@ class ExtendedController(Controller):
         }
 
     def move_to_cpu_and_return_concept_kb(self) -> ConceptKB:
-        currentkb = self.concept_kb
-        for concept in currentkb.concepts:
+        for concept in self.concept_kb.concepts:
             concept.predictor.to("cpu")
-        return currentkb
+        return self.concept_kb
 
     def add_hyponym(
         self,
@@ -310,24 +314,109 @@ class ExtendedController(Controller):
 
     #     return self.move_to_cpu_and_return_concept_kb()
 
+    # def train_concepts(
+    #     self,
+    #     concept_names: list[str],
+    #     n_epochs: int = 50,
+    #     use_concepts_as_negatives: bool = True,
+    #     max_retrieval_distance=0.01,
+    #     **train_concept_kwargs,
+    # ):
+    #     time_start = time.time()
+    #     super().train_concepts(
+    #             concept_names,
+    #             n_epochs=n_epochs,
+    #             use_concepts_as_negatives=use_concepts_as_negatives,
+    #             max_retrieval_distance=max_retrieval_distance,
+    #             **train_concept_kwargs,
+    #         )
+    #     print(f"Time to train concepts: {time.time() - time_start}")
+    #     return self.move_to_cpu_and_return_concept_kb()
+
     def train_concepts(
         self,
         concept_names: list[str],
-        n_epochs: int = 5,
+        n_epochs: int = 50,
         use_concepts_as_negatives: bool = True,
         max_retrieval_distance=0.01,
+        concepts_to_train_kwargs: dict = {},
         **train_concept_kwargs,
-    ):
+    ) -> Optional[ConceptKB]:
         time_start = time.time()
-        super().train_concepts(
-            concept_names,
-            n_epochs=n_epochs,
-            use_concepts_as_negatives=use_concepts_as_negatives,
-            max_retrieval_distance=max_retrieval_distance,
-            **train_concept_kwargs,
-        )
+        # Ensure features are prepared, only generating those which don't already exist or are dirty
+        # Cache all concepts, since we might sample from concepts whose examples haven't been cached yet
+        self.cacher.cache_segmentations(only_uncached_or_dirty=True)
+        self.cacher.cache_features(only_uncached_or_dirty=True)
+        self.move_to_cpu_and_return_concept_kb()
+        # TODO Add a variant that merges all of the datasets (merging duplicate examples using datasets' concepts_to_train field) and runs trainer.train()
+
+        concepts = [
+            self.retrieve_concept(c, max_retrieval_distance=max_retrieval_distance)
+            for c in concept_names
+        ]
+
+        concepts_to_train = {}
+        for concept in concepts:
+            concepts_to_train.update(
+                dict.fromkeys(
+                    self._get_concepts_to_train_to_update_concept(
+                        concept, **concepts_to_train_kwargs
+                    )
+                )
+            )
+        concept_selector = ConcurrentTrainingConceptSelector(list(concepts_to_train))
+        p_list = []
+
+        feature_pipeline = ConceptKBFeaturePipeline(None, None)
+        trainer = ConceptKBTrainer(self.concept_kb, feature_pipeline)
+        ret_concept_lst = []
+        while concept_selector.num_concepts_remaining > 0:
+            concept = concept_selector.get_next_concept()
+
+            if concept is None:
+                continue
+
+            examples, dataset = self.trainer.construct_dataset_for_concept_training(
+                concept, use_concepts_as_negatives=use_concepts_as_negatives
+            )
+
+            # Recache zero-shot attributes for sampled examples
+            self.cacher.recache_zs_attr_features(concept, examples=examples)
+
+            if self.use_concept_predictors_for_concept_components:
+                for component in concept.component_concepts.values():
+                    self.cacher.recache_zs_attr_features(
+                        component, examples=examples
+                    )  # Needed to predict the componnt concept
+
+            else:  # Using fixed scores for concept-image pairs
+                self.cacher.recache_component_concept_scores(concept, examples=examples)
+
+            p = mp.Process(
+                target=train_wrapper,
+                args=(
+                    trainer,
+                    concept,
+                    examples,
+                    dataset,
+                    concept_selector,
+                    n_epochs,
+                    use_concepts_as_negatives,
+                    "cuda",
+                ),
+                kwargs=train_concept_kwargs,
+            )
+            p.start()
+            p_list.append(p)
+
+        for p in p_list:
+            p.join()
+
+        for concept in ret_concept_lst:
+            self.concept_kb._concepts[concept.name] = concept
+
         print(f"Time to train concepts: {time.time() - time_start}")
-        return self.move_to_cpu_and_return_concept_kb()
+        return self.concept_kb
 
     def is_concept_in_image(
         self, image: Image, concept_name: str, unk_threshold: float = 0.1
@@ -343,7 +432,7 @@ class ExtendedController(Controller):
             concept = self.retrieve_concept(concept_name, max_retrieval_distance=0.1)
         except Exception as e:
             logger.info("Concept not found in KB. Adding new concept.")
-            concept = self.add_concept(concept_name, concept = None)
+            concept = self.add_concept(concept_name, concept=None)
 
         for example in examples:
             example.concept_name = concept.name
@@ -399,9 +488,14 @@ class ExtendedController(Controller):
         gc.collect()
         torch.cuda.empty_cache()
 
+
 class ExtendedCLIPConceptRetriever(CLIPConceptRetriever):
     def load_kb(self, concept_kb: ConceptKB):
-        super().__init__(concepts=concept_kb.concepts, clip_model=self.clip_model, clip_processor=self.clip_processor)
+        super().__init__(
+            concepts=concept_kb.concepts,
+            clip_model=self.clip_model,
+            clip_processor=self.clip_processor,
+        )
 
 
 # %%
