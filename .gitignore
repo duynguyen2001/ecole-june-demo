@@ -16,3 +16,4 @@ tensor_dir/*
 */image-backend-mock/*
 image-backend/feature_cache/*
 .env
+*/.env
