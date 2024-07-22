@@ -1,6 +1,5 @@
 # %%
 import sys
-from multiprocessing import process
 
 import torch.multiprocessing as mp
 
@@ -47,7 +46,7 @@ def train_wrapper(
     concept,
     examples,
     dataset,
-    concept_selector,
+    ret_concept_queue: mp.Queue,
     n_epochs=5,
     use_concepts_as_negatives=True,
     device="cpu",
@@ -69,10 +68,8 @@ def train_wrapper(
             **train_kwargs,
         )
         train_concept.predictor.to("cpu")
-        # ret_concept_lst.append(train_concept)
-        trainer.concept_kb._concepts[train_concept.name] = train_concept
-        # list_concepts_to_train.remove(concept)
-        concept_selector.mark_concept_completed(concept)
+        ret_concept_queue.put((concept, train_concept))
+        print(f"Training complete for concept: {concept.name}")
     except Exception as e:
         print("+++++++++++++++++++++++++++++++++++++++++++++++")
         traceback.print_exc()
@@ -369,15 +366,31 @@ class ExtendedController(Controller):
 
         feature_pipeline = ConceptKBFeaturePipeline(None, None)
         trainer = ConceptKBTrainer(self.concept_kb, feature_pipeline)
-        ret_concept_lst = []
+
+        # Initialize multiprocessing
         i = 0
+        manager = mp.Manager()
+        ret_concept_queue = manager.Queue()
+
+        # Train concepts in parallel
         while concept_selector.num_concepts_remaining > 0:
+
+            # checking if there are any concepts that finished training
+            while not ret_concept_queue.empty():
+                old_concept, new_concept = ret_concept_queue.get()
+                self.concept_kb._concepts[new_concept.name] = new_concept
+                print(
+                    f"Marking concept as completed: {old_concept.name}, before: {concept_selector.num_concepts_remaining}"
+                )
+                concept_selector.mark_concept_completed(old_concept)
             if not concept_selector.has_concept_available():
+
                 print(
                     "No current concept to train : ",
                     concept_selector.num_concepts_remaining,
                     i,
                 )
+                i += 1
                 time.sleep(5)
                 continue
             concept = concept_selector.get_next_concept()
@@ -405,7 +418,7 @@ class ExtendedController(Controller):
                     concept,
                     examples,
                     dataset,
-                    concept_selector,
+                    ret_concept_queue,
                     n_epochs,
                     use_concepts_as_negatives,
                     "cuda",
@@ -418,8 +431,13 @@ class ExtendedController(Controller):
         for p in p_list:
             p.join()
 
-        for concept in ret_concept_lst:
-            self.concept_kb._concepts[concept.name] = concept
+        while not ret_concept_queue.empty():
+            old_concept, new_concept = ret_concept_queue.get()
+            print("len of queue", ret_concept_queue.qsize())
+            self.concept_kb._concepts[new_concept.name] = new_concept
+            concept_selector.mark_concept_completed(old_concept)
+
+        print("Training complete.")
 
         print(f"Time to train concepts: {time.time() - time_start}")
         return self.concept_kb
