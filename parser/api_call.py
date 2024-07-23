@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import time
 from typing import AsyncGenerator, List
 
 import httpx
@@ -15,10 +17,10 @@ IMAGE_BACKEND_API = os.environ.get(
     "IMAGE_BACKEND_API", "http://blender12.cs.illinois.edu:16004"
 )
 
-# 
+#
 
 
-async def _make_request(function_name: str, args: dict[str, str], files: object, user_id: str= "default_user", extra_args: dict[str, str] = {}, callback = None) -> AsyncGenerator[str, None]:
+async def _make_request(function_name: str, args: dict[str, str], files: object, user_id: str= "default_user", extra_args: dict[str, str] = {}, callback = None, counter = Counter()) -> AsyncGenerator[str, None]:
     """
     Make a request to the image backend API.
 
@@ -33,7 +35,6 @@ async def _make_request(function_name: str, args: dict[str, str], files: object,
         dict: The response from the image backend API.
     """
     url = f"{IMAGE_BACKEND_API}/{function_name}"
-    counter = Counter()
 
     # Make a request to the image backend API
     # Here you would make the actual async HTTP request, for example using httpx:
@@ -45,24 +46,27 @@ async def _make_request(function_name: str, args: dict[str, str], files: object,
             args[arg] = extra_args[arg]
     # yield streaming_response_yield(f"Making a request to the image backend API with function {url}, args: {args}\n\n", counter)
     logger.info(f"Making a request to the image backend API with function {url}, args: {args}, images: {files}")
-    
-
     async with httpx.AsyncClient(timeout=2000) as client:
         async with client.stream("POST", url, params=args, files=files) as response:
-            async for chunk in response.aiter_text():
-                if chunk.startswith("status: "):
-                    yield streaming_response_yield(chunk.replace("status: ", ""), counter)
-                elif chunk.startswith("error: "):
-                    yield streaming_response_end(chunk.replace("error: ", ""), counter)
-                elif chunk.startswith("result: "):
-                    yield streaming_response_yield(
-                        chunk.replace("result: ", ""), counter
-                    )
-                    callback(chunk.replace("result: ", "\n\n"))
-                else:
-                    yield streaming_response_yield(chunk, counter)
+            try:
+                response.raise_for_status()
+                async for chunk in response.aiter_text():
+                    if chunk.startswith("status: "):
+                        yield streaming_response_yield(chunk.replace("status: ", ""), counter)
+                    elif chunk.startswith("error: "):
+                        yield streaming_response_end(chunk.replace("error: ", ""), counter)
+                    elif chunk.startswith("result: "):
+                        yield streaming_response_yield(
+                            chunk.replace("result: ", ""), counter
+                        )
+                        callback(chunk.replace("result: ", "\n\n"))
+                    else:
+                        yield streaming_response_yield(chunk, counter)
+                    yield streaming_response_yield(f"\n\n", counter)
+            except httpx.HTTPStatusError as e:
+                yield streaming_response_end(f"HTTP Error: {e}", counter)
 
-async def make_requests(functions, params, images, user_id = "default_user", callback = None) -> AsyncGenerator[str, None]:
+async def make_requests(functions, params, images, user_id = "default_user", callback = None, counter: Counter = Counter()) -> AsyncGenerator[str, None]:
     """
     Make a request to the image backend API.
 
@@ -73,6 +77,7 @@ async def make_requests(functions, params, images, user_id = "default_user", cal
     Returns:
     dict: The response from the image backend API.
     """
+    i = 0
     for function in functions:
         function_name = function["name"]
         args = function["args"]
@@ -102,11 +107,11 @@ async def make_requests(functions, params, images, user_id = "default_user", cal
             arg_dict["concepts"] = ", ".join(arg_dict["concepts"])
 
         description = function["description"]
-
         if description:
             yield streaming_response_yield(
-                substitute_brackets(description, params) + "\n\n", Counter()
+                substitute_brackets(description, params) + "\n\n", counter
             )
-
-        async for msg in _make_request(function_name, arg_dict, image_upload_list, user_id, extra_args, callback):
+        
+        async for msg in _make_request(function_name, arg_dict, image_upload_list, user_id, extra_args, callback, counter= counter):
             yield msg
+    yield streaming_response_yield("success\n\n", counter)

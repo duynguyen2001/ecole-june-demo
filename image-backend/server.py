@@ -908,6 +908,7 @@ async def train_concepts(
 
         async def streamer(user_id, cncpts):
             yield "status: \nTraining concepts...\n"
+            yield "status: yes\n\n\n\n\n\n"
             try:
                 time_start = time.time()
                 for res in app.state.agentmanager.train_concepts(user_id, cncpts, streaming=streaming):

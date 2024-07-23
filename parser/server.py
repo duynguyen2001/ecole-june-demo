@@ -1,3 +1,5 @@
+import asyncio
+
 from api_call import make_requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -80,19 +82,18 @@ async def generate_text(request: Request) -> None:
         # Check if the template requires an image and if there is an image in the last input
         if image_required and len(last_input["images"]) == 0:
             second_last_user_input = get_last_user_input(conversations, 1)
+            res_str = "Processing...\n\n"
             if second_last_user_input is not None and len(second_last_user_input["images"]) > 0:
                 last_input["images"] = second_last_user_input["images"]
-                res_str = "Processing...\n\n"
             else:
                 third_last_user_input = get_last_user_input(conversations, 2)
                 if third_last_user_input is not None and len(third_last_user_input["images"]) > 0:
                     last_input["images"] = third_last_user_input["images"]
-                    res_str = "Processing...\n\n"
                 else:
                     yield streaming_response_end(
                         "Sorry, but you forgot to input an image", counter
                     )
-                
+
         elif template_title is not None:
             # Show status message
             res_str = "Processing...\n\n"
@@ -115,10 +116,9 @@ async def generate_text(request: Request) -> None:
         # Call the APIs to generate the text
         if template_title is not None:
             async for response in make_requests(
-                functions, params, last_input["images"], userId, callback = update_last_stream
+                functions, params, last_input["images"], userId, callback = update_last_stream, counter = counter
             ):
                 yield response
-
         # yield the final response string, this will be the final response, only happens when all the APIs have been called successfully
         yield streaming_response_end(last_res_str, counter)
 
