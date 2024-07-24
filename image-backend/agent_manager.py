@@ -834,7 +834,7 @@ class AgentManager:
         logger.info(f"\n\nconcept_names: {concept_names}\n\n")
         try:
             if streaming:
-                yield f"status: Training {len(concept_names)} concepts...\n\n"
+                yield f"status: Training concepts...\n\n"
                 # Start the status thread
                 running_thread = threading.Thread(target=self.executeControllerFunctionWithSave, args=(user_id, "train_concepts", concept_names,), kwargs=train_concept_kwargs)
 
