@@ -735,12 +735,11 @@ async def add_examples(
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):
-            yield "status: Adding examples..."
+            yield "status: Adding examples...\n\n"
             try:
-                result = app.state.agentmanager.add_examples(
+                async for msg in app.state.agentmanager.add_examples(
                     user_id, imgs, concept_name, streaming=streaming
-                )
-                for msg in result:
+                ):
                     yield msg
             except Exception as e:
                 import sys
@@ -749,6 +748,7 @@ async def add_examples(
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
+            yield "result: Examples added\n\n"
 
         return StreamingResponse(
             streamer(user_id, concept_name, processed_images),
@@ -787,7 +787,7 @@ async def add_concept_negatives(
                 result = app.state.agentmanager.add_concept_negatives(
                     user_id, imgs, concept_name, streaming=streaming
                 )
-                for msg in result:
+                async for msg in result:
                     yield msg
             except Exception as e:
                 import sys
@@ -904,44 +904,30 @@ async def train_concepts(
     concepts: str,
     streaming: str = "false",
 ):
-    if streaming == "true":
 
-        async def streamer(user_id, cncpts):
-            yield "status: \nTraining concepts...\n"
-            yield "status: yes\n\n\n\n\n\n"
-            try:
-                time_start = time.time()
-                for res in app.state.agentmanager.train_concepts(user_id, cncpts, streaming=streaming):
-                    logger.info(res)
-                    yield res
-                logger.info(
-                    str("Train concepts time: " + str(time.time() - time_start))
-                )
-            except Exception as e:
-                import sys
-                import traceback
-
-                logger.error(traceback.format_exc())
-                logger.error(sys.exc_info())
-                yield f"error: {str(e)}"
-
-        return StreamingResponse(
-            streamer(user_id, concepts.split(", ")),
-            media_type="text/event-stream",
-        )
-    else:
-        time_start = time.time()
+    async def streamer(user_id, cncpts):
+        yield "status: \nTraining concepts...\n"
         try:
-            await app.state.agentmanager.train_concepts(user_id, concepts)
-            logger.info(str("Train concepts time: " + str(time.time() - time_start)))
-            return JSONResponse(content={"status": "success"})
+            time_start = time.time()
+            async for res in app.state.agentmanager.train_concepts(user_id, cncpts, streaming=streaming):
+                yield res
+            logger.info(
+                str("Train concepts time: " + str(time.time() - time_start))
+            )
+            
         except Exception as e:
             import sys
             import traceback
 
             logger.error(traceback.format_exc())
             logger.error(sys.exc_info())
-            raise HTTPException(status_code=404, detail=str(e))
+            yield f"error: {str(e)}"
+
+    return StreamingResponse(
+        streamer(user_id, concepts.split(", ")),
+        media_type="text/event-stream",
+    )
+
         
 @app.post("/undo_concept_kb")
 def undo_concept_kb(user_id: str, streaming: str = "false"):
@@ -991,6 +977,24 @@ def get_tensor(uid):
     return FileResponse(
         os.path.join(TENSOR_DIR, filename), media_type="application/octet-stream"
     )
+
+import asyncio
+
+
+@app.post("/healthcheck")
+async def healthcheck():
+    async def streamer():
+        for _ in range(5):
+            await asyncio.sleep(1)
+            yield "status: Healthy\n\n"
+        
+        await asyncio.sleep(1)
+        yield "result: All systems operational\n\n"
+    return StreamingResponse(
+        streamer(),
+        media_type="text/event-stream",
+    )
+    
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn')

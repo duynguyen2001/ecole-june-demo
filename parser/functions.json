@@ -395,5 +395,18 @@
                 }
             }
         ]
+    },
+    {
+        "title": "Healthcheck",
+        "type": "training",
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "healthcheck",
+                "description": "Checking the health of the backend...",
+                "args": {}
+            }
+        ]
     }
 ]

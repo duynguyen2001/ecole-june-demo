@@ -55,6 +55,8 @@ logger.info(
     )
 )
 
+import asyncio
+import threading
 import time
 import uuid
 from io import BytesIO
@@ -133,7 +135,6 @@ class Agent:
                 logger.error(traceback.format_exc())
                 output_queue.put((task_id, "error", str(e)))
                 raise e
-                
 
     def __init__(self, device) -> None:
         self.input_queue = Queue()
@@ -168,6 +169,38 @@ class Agent:
                     raise Exception(
                         f"Unexpected status for task {task_id}: {result[1]}"
                     )
+            else:
+                # Put the result back into the queue
+                self.output_queue.put(result)
+
+    async def call_async(self, model_key, func_name, *args, **kwargs) -> Any:
+        task_id = str(uuid.uuid4())
+        status = "processing"
+
+        self.input_queue.put((task_id, status, model_key, func_name, args, kwargs))
+
+        while True:
+            result = (
+                self.output_queue.get()
+            )
+            if result[0] == task_id:
+                if result[1] == "done":
+                    yield "result: " + str(result[2]) + "\n\n"
+                elif result[1] == "error":
+                    logger.error(sys.exc_info())
+                    logger.error(traceback.format_exc())
+                    raise Exception(f"Error processing task {task_id}: {result[2]}")
+                elif result[1] == "status":
+                    yield "status: " + str(result[2]) + "\n\n"
+                else:
+                    logger.error(sys.exc_info())
+                    logger.error(traceback.format_exc())
+                    raise Exception(
+                        f"Unexpected status for task {task_id}: {result[1]}"
+                    )
+            else:
+                # Put the result back into the queue
+                self.output_queue.put(result)
 
     def shutdown(self) -> None:
         if self.process.is_alive():
@@ -343,6 +376,51 @@ class AgentManager:
             gc.collect()  # Explicitly call garbage collector
             # Optionally, you can clear the unused memory from the GPU cache
             torch.cuda.empty_cache()
+
+    async def executeControllerFunctionWithSaveStreaming(
+        self, user_id: str, func, *args, **kwargs
+    ):
+        """
+        If the function is successful, save the concept knowledge base.
+        
+        Args:
+            user_id (str): User ID
+            func (_type_): Function to execute
+            
+        Raises:
+            Exception: _description_
+            Exception: _description_
+            
+        Returns:
+            str: Checkpoint path
+        """
+
+        agent_key = self.get_next_agent_key()
+        concept_kb = None
+        try:
+            # load concept kb by user_id
+            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
+            # Load user KB first
+            self.agents[agent_key].call("controller", "load_kb", concept_kb)
+
+            # run and return result
+            concept_kb = self.agents[agent_key].call_async(
+                "controller", func, *args, **kwargs
+            )
+
+            # move concept kb to cpu
+            for concept in concept_kb:
+                concept.predictor.to("cpu")
+            ckpt_path = self.save_concept_kb(user_id, concept_kb)
+            yield f"Checkpoint path: {ckpt_path}\n\n"
+        except Exception as e:
+            # General exception handling for any unexpected errors
+            logger.error(sys.exc_info())
+            logger.error(traceback.format_exc())
+            # raise Exception(f"Error in executeControllerFunctionWithSave: {str(e)}")
+            raise e
+        finally:
+            gc.collect()
 
     def executeRetrieverFunction(self, user_id: str, func, *args, **kwargs) -> Any:
         """
@@ -576,7 +654,7 @@ class AgentManager:
             return {"status": "success"}
         # return convert_to_serializable(result)
 
-    def add_concept_negatives(
+    async def add_concept_negatives(
         self,
         user_id: str,
         images: list[PIL.Image.Image],
@@ -587,7 +665,7 @@ class AgentManager:
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
         for example in concept_examples:
             example.is_negative = True
-        result = self.executeControllerFunctionWithSave(
+        self.executeControllerFunctionWithSave(
             user_id,
             "add_concept_negatives",
             concept_name,
@@ -596,9 +674,6 @@ class AgentManager:
         if streaming:
             yield f"status: Add negative examples successfully time: {time.time() - time_start}\n\n"
             yield f"result: {len(concept_examples)} negative examples added to concept {concept_name}\n\n"
-
-        else:
-            return result
 
     def add_component_concept(
         self,
@@ -721,7 +796,7 @@ class AgentManager:
             )
         return results
 
-    def add_examples(
+    async def add_examples(
         self,
         user_id: str,
         images: list[PIL.Image.Image],
@@ -731,7 +806,6 @@ class AgentManager:
 
         if concept_name is None:
             RuntimeError("Concept name is required")
-
         time_start = time.time()
         concept_examples = self._loc_and_seg_multiple_images(images, concept_name)
 
@@ -748,11 +822,8 @@ class AgentManager:
         if streaming:
             yield f"status: Added examples in {(time.time() - time_start): .2f}s\n\n"
             yield f"result: {len(concept_examples)} examples added to concept {concept_name}\n\n"
-        else:
-            logger.info(f"Add examples successfully time: {time.time() - time_start}")
-            return {"status": "success"}
 
-    def train_concepts(
+    async def train_concepts(
         self,
         user_id: str,
         concept_names: list[str],
@@ -763,18 +834,21 @@ class AgentManager:
         logger.info(f"\n\nconcept_names: {concept_names}\n\n")
         try:
             if streaming:
-                yield f"status: Training {len(concept_names)} concepts\n\n"
-                self.executeControllerFunctionWithSave(
-                    user_id, "train_concepts", concept_names, **train_concept_kwargs
-                )
+                yield f"status: Training {len(concept_names)} concepts...\n\n"
+                # Start the status thread
+                running_thread = threading.Thread(target=self.executeControllerFunctionWithSave, args=(user_id, "train_concepts", concept_names,), kwargs=train_concept_kwargs)
+
+                try:
+                    running_thread.start()
+                    while running_thread.is_alive():
+                        yield "status: "
+                        await asyncio.sleep(1)
+                finally:
+                    running_thread.join()
+
                 yield f"status: Training completed\n\n"
                 yield f"status: Total time for training  concepts: {time.time() - time_start}"
                 yield f"result: Trained concept(s) successfully\n\n"
-            else:
-                self.executeControllerFunctionWithSave(
-                    user_id, "train_concepts", concept_names, **train_concept_kwargs
-                )
-                return {"status": "success"}
         except Exception as e:
 
             logger.error(traceback.format_exc())
