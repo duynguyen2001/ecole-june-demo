@@ -1,5 +1,12 @@
 # %%
 
+import os
+
+tmp_dir = "/scratch/tmp"
+os.makedirs(tmp_dir, exist_ok=True)
+os.environ["TMPDIR"] = tmp_dir
+os.environ["TEMP"] = tmp_dir
+os.environ["TMP"] = tmp_dir
 from dotenv import load_dotenv
 
 load_dotenv()
