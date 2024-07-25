@@ -207,7 +207,7 @@ class ExtendedController(Controller):
     def train_concepts(
         self,
         concept_names: list[str],
-        n_epochs: int = 80,
+        n_epochs: int = 100,
         use_concepts_as_negatives: bool = True,
         max_retrieval_distance=0.01,
         concepts_to_train_kwargs: dict = {},

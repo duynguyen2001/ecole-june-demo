@@ -14,7 +14,7 @@ logger = logging.getLogger("uvicorn.error")
 
 # Load the environment variables
 IMAGE_BACKEND_API = os.environ.get(
-    "IMAGE_BACKEND_API", "http://blender12.cs.illinois.edu:16004"
+    "IMAGE_BACKEND_API", "http://blender13.cs.illinois.edu:16004"
 )
 
 #
