@@ -21,7 +21,7 @@ from typing import Optional
 import PIL.Image
 import torch
 from controller import Controller
-from controller.train import ConcurrentTrainingConceptSelector
+from controller.train.train_parallel import ConcurrentTrainingConceptSelector
 from kb_ops import ConceptKBTrainer
 from kb_ops.caching.cacher import ConceptKBFeatureCacher
 from kb_ops.dataset import FeatureDataset, extend_with_global_negatives
@@ -31,8 +31,8 @@ from model.concept import Concept, ConceptExample, ConceptKB
 from PIL import Image
 
 torch.autograd.set_detect_anomaly(True)
-if mp.get_start_method(allow_none=True) != "spawn":
-    mp.set_start_method("spawn", force=True)
+# if mp.get_start_method(allow_none=True) != "spawn":
+#     mp.set_start_method("spawn", force=True)
 # DEFAULT_CKPT = os.environ.get(
 #     "DEFAULT_CKPT",
 #     "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_05-20:23:53-yd491eo3-all_planes_and_guns-infer_localize/concept_kb_epoch_50.pt",
@@ -158,11 +158,6 @@ class ExtendedController(Controller):
             "predicted_label": predicted_label,  # str
         }
 
-    def move_to_cpu_and_return_concept_kb(self) -> ConceptKB:
-        for concept in self.concept_kb.concepts:
-            concept.predictor.to("cpu")
-        return self.concept_kb
-
     def add_hyponym(
         self,
         child_name: str,
@@ -172,7 +167,7 @@ class ExtendedController(Controller):
         print(f"Adding hyponym: {child_name} to parent: {parent_name}")
         super().add_hyponym(child_name, parent_name, child_max_retrieval_distance)
 
-        return self.move_to_cpu_and_return_concept_kb()
+        return self.concept_kb.cpu()
 
     def add_component_concept(
         self,
@@ -183,7 +178,7 @@ class ExtendedController(Controller):
         super().add_component_concept(
             component_concept_name, concept_name, component_max_retrieval_distance
         )
-        return self.move_to_cpu_and_return_concept_kb()
+        return self.concept_kb.cpu()
 
     # def train_concepts(
     #     self,
@@ -204,6 +199,118 @@ class ExtendedController(Controller):
     #     print(f"Time to train concepts: {time.time() - time_start}")
     #     return self.move_to_cpu_and_return_concept_kb()
 
+    # def train_concepts(
+    #     self,
+    #     concept_names: list[str],
+    #     n_epochs: int = 100,
+    #     use_concepts_as_negatives: bool = True,
+    #     max_retrieval_distance=0.01,
+    #     concepts_to_train_kwargs: dict = {},
+    #     **train_concept_kwargs,
+    # ) -> Optional[ConceptKB]:
+    #     time_start = time.time()
+    #     # Ensure features are prepared, only generating those which don't already exist or are dirty
+    #     # Cache all concepts, since we might sample from concepts whose examples haven't been cached yet
+    #     self.cacher.cache_segmentations(only_uncached_or_dirty=True)
+    #     self.cacher.cache_features(only_uncached_or_dirty=True)
+    #     self.move_to_cpu_and_return_concept_kb()
+    #     # TODO Add a variant that merges all of the datasets (merging duplicate examples using datasets' concepts_to_train field) and runs trainer.train()
+
+    #     concepts = [
+    #         self.retrieve_concept(c, max_retrieval_distance=max_retrieval_distance)
+    #         for c in concept_names
+    #     ]
+
+    #     concepts_to_train = {}
+    #     for concept in concepts:
+    #         concepts_to_train.update(
+    #             dict.fromkeys(
+    #                 self._get_concepts_to_train_to_update_concept(
+    #                     concept, **concepts_to_train_kwargs
+    #                 )
+    #             )
+    #         )
+    #     concept_selector = ConcurrentTrainingConceptSelector(list(concepts_to_train))
+    #     p_list = []
+
+    #     feature_pipeline = ConceptKBFeaturePipeline(None, None)
+    #     trainer = ConceptKBTrainer(self.concept_kb, feature_pipeline)
+
+    #     # Initialize multiprocessing
+    #     i = 0
+    #     manager = mp.Manager()
+    #     ret_concept_queue = manager.Queue()
+
+    #     # Train concepts in parallel
+    #     while concept_selector.num_concepts_remaining > 0:
+
+    #         # checking if there are any concepts that finished training
+    #         while not ret_concept_queue.empty():
+    #             old_concept, new_concept = ret_concept_queue.get()
+    #             self.concept_kb._concepts[new_concept.name] = new_concept
+    #             print(
+    #                 f"Marking concept as completed: {old_concept.name}, before: {concept_selector.num_concepts_remaining}"
+    #             )
+    #             concept_selector.mark_concept_completed(old_concept)
+    #         if not concept_selector.has_concept_available():
+
+    #             print(
+    #                 "No current concept to train : ",
+    #                 concept_selector.num_concepts_remaining,
+    #                 i,
+    #             )
+    #             i += 1
+    #             time.sleep(5)
+    #             continue
+    #         concept = concept_selector.get_next_concept()
+
+    #         examples, dataset = self.trainer.construct_dataset_for_concept_training(
+    #             concept, use_concepts_as_negatives=use_concepts_as_negatives
+    #         )
+
+    #         # Recache zero-shot attributes for sampled examples
+    #         self.cacher.recache_zs_attr_features(concept, examples=examples)
+
+    #         if self.use_concept_predictors_for_concept_components:
+    #             for component in concept.component_concepts.values():
+    #                 self.cacher.recache_zs_attr_features(
+    #                     component, examples=examples
+    #                 )  # Needed to predict the componnt concept
+
+    #         else:  # Using fixed scores for concept-image pairs
+    #             self.cacher.recache_component_concept_scores(concept, examples=examples)
+
+    #         p = mp.Process(
+    #             target=train_wrapper,
+    #             args=(
+    #                 trainer,
+    #                 concept,
+    #                 examples,
+    #                 dataset,
+    #                 ret_concept_queue,
+    #                 n_epochs,
+    #                 use_concepts_as_negatives,
+    #                 "cuda",
+    #             ),
+    #             kwargs=train_concept_kwargs,
+    #         )
+    #         p.start()
+    #         p_list.append(p)
+
+    #     for p in p_list:
+    #         p.join()
+
+    #     while not ret_concept_queue.empty():
+    #         old_concept, new_concept = ret_concept_queue.get()
+    #         print("len of queue", ret_concept_queue.qsize())
+    #         self.concept_kb._concepts[new_concept.name] = new_concept
+    #         concept_selector.mark_concept_completed(old_concept)
+
+    #     print("Training complete.")
+
+    #     print(f"Time to train concepts: {time.time() - time_start}")
+    #     return self.concept_kb
+
     def train_concepts(
         self,
         concept_names: list[str],
@@ -214,107 +321,15 @@ class ExtendedController(Controller):
         **train_concept_kwargs,
     ) -> Optional[ConceptKB]:
         time_start = time.time()
-        # Ensure features are prepared, only generating those which don't already exist or are dirty
-        # Cache all concepts, since we might sample from concepts whose examples haven't been cached yet
-        self.cacher.cache_segmentations(only_uncached_or_dirty=True)
-        self.cacher.cache_features(only_uncached_or_dirty=True)
-        self.move_to_cpu_and_return_concept_kb()
-        # TODO Add a variant that merges all of the datasets (merging duplicate examples using datasets' concepts_to_train field) and runs trainer.train()
-
-        concepts = [
-            self.retrieve_concept(c, max_retrieval_distance=max_retrieval_distance)
-            for c in concept_names
-        ]
-
-        concepts_to_train = {}
-        for concept in concepts:
-            concepts_to_train.update(
-                dict.fromkeys(
-                    self._get_concepts_to_train_to_update_concept(
-                        concept, **concepts_to_train_kwargs
-                    )
-                )
-            )
-        concept_selector = ConcurrentTrainingConceptSelector(list(concepts_to_train))
-        p_list = []
-
-        feature_pipeline = ConceptKBFeaturePipeline(None, None)
-        trainer = ConceptKBTrainer(self.concept_kb, feature_pipeline)
-
-        # Initialize multiprocessing
-        i = 0
-        manager = mp.Manager()
-        ret_concept_queue = manager.Queue()
-
-        # Train concepts in parallel
-        while concept_selector.num_concepts_remaining > 0:
-
-            # checking if there are any concepts that finished training
-            while not ret_concept_queue.empty():
-                old_concept, new_concept = ret_concept_queue.get()
-                self.concept_kb._concepts[new_concept.name] = new_concept
-                print(
-                    f"Marking concept as completed: {old_concept.name}, before: {concept_selector.num_concepts_remaining}"
-                )
-                concept_selector.mark_concept_completed(old_concept)
-            if not concept_selector.has_concept_available():
-
-                print(
-                    "No current concept to train : ",
-                    concept_selector.num_concepts_remaining,
-                    i,
-                )
-                i += 1
-                time.sleep(5)
-                continue
-            concept = concept_selector.get_next_concept()
-
-            examples, dataset = self.trainer.construct_dataset_for_concept_training(
-                concept, use_concepts_as_negatives=use_concepts_as_negatives
-            )
-
-            # Recache zero-shot attributes for sampled examples
-            self.cacher.recache_zs_attr_features(concept, examples=examples)
-
-            if self.use_concept_predictors_for_concept_components:
-                for component in concept.component_concepts.values():
-                    self.cacher.recache_zs_attr_features(
-                        component, examples=examples
-                    )  # Needed to predict the componnt concept
-
-            else:  # Using fixed scores for concept-image pairs
-                self.cacher.recache_component_concept_scores(concept, examples=examples)
-
-            p = mp.Process(
-                target=train_wrapper,
-                args=(
-                    trainer,
-                    concept,
-                    examples,
-                    dataset,
-                    ret_concept_queue,
-                    n_epochs,
-                    use_concepts_as_negatives,
-                    "cuda",
-                ),
-                kwargs=train_concept_kwargs,
-            )
-            p.start()
-            p_list.append(p)
-
-        for p in p_list:
-            p.join()
-
-        while not ret_concept_queue.empty():
-            old_concept, new_concept = ret_concept_queue.get()
-            print("len of queue", ret_concept_queue.qsize())
-            self.concept_kb._concepts[new_concept.name] = new_concept
-            concept_selector.mark_concept_completed(old_concept)
+        if torch.cuda.is_available():
+            num_gpus = torch.cuda.device_count()
+            AGENT_GPU_LIST = list(range(num_gpus))
+            self.train_concepts_parallel(concept_names=concept_names, n_epochs=n_epochs, use_concepts_as_negatives=use_concepts_as_negatives, max_retrieval_distance=max_retrieval_distance, concepts_to_train_kwargs=concepts_to_train_kwargs, devices = AGENT_GPU_LIST, **train_concept_kwargs)
 
         print("Training complete.")
 
         print(f"Time to train concepts: {time.time() - time_start}")
-        return self.concept_kb
+        return self.concept_kb.cpu()
 
     def is_concept_in_image(
         self, image: Image, concept_name: str, unk_threshold: float = 0.1
@@ -336,7 +351,7 @@ class ExtendedController(Controller):
             example.concept_name = concept.name
 
         self.add_examples(examples, concept=concept, concept_name=None)
-        return self.move_to_cpu_and_return_concept_kb()
+        return self.concept_kb.cpu()
 
     def add_concept_negatives(
         self, concept_name: str, negatives: list[ConceptExample]
@@ -352,7 +367,7 @@ class ExtendedController(Controller):
             example.concept_name = concept.name
         super().add_concept_negatives(concept.name, negatives)
 
-        return self.move_to_cpu_and_return_concept_kb()
+        return self.concept_kb.cpu()
 
     #     ############################
     #     # Functionality for KB Ops #
