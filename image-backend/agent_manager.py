@@ -709,15 +709,8 @@ class AgentManager:
         if user_id == "":
             user_id = "default_user"
         if clear_all:
-            concept_kb = ConceptKB()
-            concept_kb.initialize(
-                ConceptKBConfig(
-                    n_trained_attrs=N_ATTRS_DINO,
-                )
-            )
-
-            for concept in concept_kb:
-                concept.predictor.to("cpu")
+            concept_kb = ConceptKB.load(self.default_ckpt)
+            concept_kb._concepts = {}
         else:
             concept_kb = ConceptKB.load(self.default_ckpt)
 

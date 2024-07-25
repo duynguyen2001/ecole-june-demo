@@ -546,7 +546,7 @@ async def reset_kb(
             time_start = time.time()
             yield "status: Resetting concept KB..."
             try:
-                if clear_all == "True":
+                if clear_all == "true":
                     app.state.agentmanager.reset_kb(user_id, True)
                 else:
                     app.state.agentmanager.reset_kb(user_id, False)
