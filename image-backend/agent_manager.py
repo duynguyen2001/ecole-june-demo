@@ -310,10 +310,14 @@ class AgentManager:
         concept_kb = None
         try:
             # load concept kb by user_id
-            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
+            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device, get_temp=False)
 
             # Load user KB first
             self.agents[agent_key].call("controller", "load_kb", concept_kb)
+
+            # remove keyword temp if it is
+            if "temp" in kwargs:
+                del kwargs['temp']
 
             # run and return result
             return self.agents[agent_key].call("controller", func, *args, **kwargs)
@@ -350,11 +354,16 @@ class AgentManager:
         """
         agent_key = self.get_next_agent_key()
         concept_kb = None
+        temp = kwargs.get("temp", False)
         try:
             # load concept kb by user_id
             concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
             # Load user KB first
             self.agents[agent_key].call("controller", "load_kb", concept_kb)
+
+            # remove keyword temp if it is
+            if "temp" in kwargs:
+                del kwargs["temp"]
 
             # run and return result
             concept_kb = self.agents[agent_key].call(
@@ -364,7 +373,7 @@ class AgentManager:
             # move concept kb to cpu
             for concept in concept_kb:
                 concept.predictor.to("cpu")
-            ckpt_path = self.save_concept_kb(user_id, concept_kb)
+            ckpt_path = self.save_concept_kb(user_id, concept_kb, temp)
             return ckpt_path
         except Exception as e:
             # General exception handling for any unexpected errors
@@ -376,51 +385,6 @@ class AgentManager:
             gc.collect()  # Explicitly call garbage collector
             # Optionally, you can clear the unused memory from the GPU cache
             torch.cuda.empty_cache()
-
-    async def executeControllerFunctionWithSaveStreaming(
-        self, user_id: str, func, *args, **kwargs
-    ):
-        """
-        If the function is successful, save the concept knowledge base.
-        
-        Args:
-            user_id (str): User ID
-            func (_type_): Function to execute
-            
-        Raises:
-            Exception: _description_
-            Exception: _description_
-            
-        Returns:
-            str: Checkpoint path
-        """
-
-        agent_key = self.get_next_agent_key()
-        concept_kb = None
-        try:
-            # load concept kb by user_id
-            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
-            # Load user KB first
-            self.agents[agent_key].call("controller", "load_kb", concept_kb)
-
-            # run and return result
-            concept_kb = self.agents[agent_key].call_async(
-                "controller", func, *args, **kwargs
-            )
-
-            # move concept kb to cpu
-            for concept in concept_kb:
-                concept.predictor.to("cpu")
-            ckpt_path = self.save_concept_kb(user_id, concept_kb)
-            yield f"Checkpoint path: {ckpt_path}\n\n"
-        except Exception as e:
-            # General exception handling for any unexpected errors
-            logger.error(sys.exc_info())
-            logger.error(traceback.format_exc())
-            # raise Exception(f"Error in executeControllerFunctionWithSave: {str(e)}")
-            raise e
-        finally:
-            gc.collect()
 
     def executeRetrieverFunction(self, user_id: str, func, *args, **kwargs) -> Any:
         """
@@ -454,7 +418,31 @@ class AgentManager:
     ##################
     # ConceptKB ops  #
     ##################
-    def get_concept_kb(self, user_id: str, device: str = "cpu") -> ConceptKB:
+    def list_concept_dir(self, user_id: str, get_temp: bool = True) -> list[str]:
+        """
+        List the concept knowledge base (KB) checkpoint files for a user.
+
+        Args:
+            user_id (str): User ID
+
+        Returns:
+            list[str]: List of checkpoint paths
+        """
+        # Move concept kb to device
+        user_dir = f"{self.concept_kb_dir}/{user_id}"
+        os.makedirs(user_dir, exist_ok=True)
+
+        # get all checkpoint in user_id and get the last checkpoint is the lastname in the list
+        if get_temp:
+            files = [path for path in os.listdir(user_dir) if path.endswith(".pt")]
+        else:
+            files = [
+                path for path in os.listdir(user_dir) if path.endswith(".pt") and "_temp" not in path
+            ]
+        files.sort(reverse= True)
+        return files
+
+    def get_concept_kb(self, user_id: str, device: str = "cpu", get_temp = True) -> ConceptKB:
         """
         This method gets the concept knowledge base (KB) for a user.
 
@@ -467,34 +455,42 @@ class AgentManager:
         """
         logger.info(str(f"Getting concept KB for user {user_id}"))
 
-        if user_id in self.checkpoint_path_dict:
-            concept_kb_path = self.checkpoint_path_dict[user_id][-1]
-            if concept_kb_path in self.cache_kb:
-                concept_kb = self.cache_kb[concept_kb_path]
-            else:
-                concept_kb = ConceptKB.load(concept_kb_path)
-        else:
-            # load default concept kb
+        # if user_id in self.checkpoint_path_dict:
+        #     concept_kb_path = self.checkpoint_path_dict[user_id][-1]
+        #     if concept_kb_path in self.cache_kb:
+        #         concept_kb = self.cache_kb[concept_kb_path]
+        #     else:
+        #         concept_kb = ConceptKB.load(concept_kb_path)
+        # else:
+        #     # load default concept kb
+        #     concept_kb = ConceptKB.load(self.default_ckpt)
+        #     # save default concept kb
+        #     os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
+        #     checkpoint_path = (
+        #         f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
+        #     )
+        #     concept_kb.save(checkpoint_path)
+        #     self.checkpoint_path_dict[user_id] = [checkpoint_path]
+        #     self.cache_kb[checkpoint_path] = concept_kb
+
+        # if len(self.cache_kb) > 10:
+        #     self.cache_kb.pop(list(self.cache_kb.keys())[0])
+
+        files = self.list_concept_dir(user_id, get_temp)
+        logger.info(f"{files}")
+        if len(files) == 0:
             concept_kb = ConceptKB.load(self.default_ckpt)
             # save default concept kb
-            os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
-            checkpoint_path = (
-                f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
-            )
-            concept_kb.save(checkpoint_path)
-            self.checkpoint_path_dict[user_id] = [checkpoint_path]
-            self.cache_kb[checkpoint_path] = concept_kb
-
-        if len(self.cache_kb) > 10:
-            self.cache_kb.pop(list(self.cache_kb.keys())[0])
-
-        # Move concept kb to device
+            self.save_concept_kb(user_id, concept_kb)
+        else:
+            full_path = os.path.join(self.concept_kb_dir, user_id, files[0])
+            concept_kb = ConceptKB.load(full_path)
 
         for concept in concept_kb:
             concept.predictor.to(device)
         return concept_kb
 
-    def save_concept_kb(self, user_id: str, concept_kb: ConceptKB) -> str:
+    def save_concept_kb(self, user_id: str, concept_kb: ConceptKB, temp = False) -> str:
         """
         Save the concept knowledge base (KB) for a user.
 
@@ -506,9 +502,14 @@ class AgentManager:
             str: Checkpoint path
         """
         os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
-        checkpoint_path = (
-            f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
-        )
+        if temp:
+            checkpoint_path = (
+                f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}_temp.pt"
+            )
+        else:
+            checkpoint_path = (
+                f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
+            )
 
         for concept in concept_kb:
             concept.predictor.to("cpu")
@@ -529,30 +530,36 @@ class AgentManager:
         Returns:
             str: Checkpoint path
         """
-        if (
-            user_id in self.checkpoint_path_dict
-            and len(self.checkpoint_path_dict[user_id]) > 1
-        ):
-            checkpoint_path = self.checkpoint_path_dict[user_id][-2]
-            if os.path.exists(checkpoint_path):
-                os.remove(self.checkpoint_path_dict[user_id][-1])
-            self.checkpoint_path_dict[user_id].pop()
-            self.cache_kb[user_id] = ConceptKB.load(checkpoint_path)
-            return checkpoint_path
-        else:
+        # if (
+        #     user_id in self.checkpoint_path_dict
+        #     and len(self.checkpoint_path_dict[user_id]) > 1
+        # ):
+        #     checkpoint_path = self.checkpoint_path_dict[user_id][-2]
+        #     if os.path.exists(checkpoint_path):
+        #         os.remove(self.checkpoint_path_dict[user_id][-1])
+        #     self.checkpoint_path_dict[user_id].pop()
+        #     self.cache_kb[user_id] = ConceptKB.load(checkpoint_path)
+        #     return checkpoint_path
+        # else:
+        #     return "No checkpoint to undo"
+
+        files = self.list_concept_dir(user_id, get_temp=True)
+        # find the second last checkpoint but not temp checkpoint, then remove all checkpoint before it
+        count, index = 0, 0
+        if len(files)  == 0:
             return "No checkpoint to undo"
+        else:
+            for file in files:
+                if "_temp" not in file:
+                    count += 1
+                    if count == 2:
+                        break
+                index += 1
+            for i in range(index):
+                if os.path.exists(f"{self.concept_kb_dir}/{user_id}/{files[i]}"):
+                    os.remove(f"{self.concept_kb_dir}/{user_id}/{files[i]}")
 
-    def get_checkpoint_list(self, user_id: str) -> list[str]:
-        """
-        Get the list of checkpoint paths for a user.
-
-        Args:
-            user_id (str): User ID
-
-        Returns:
-            list[str]: List of checkpoint paths
-        """
-        return self.checkpoint_path_dict.get(user_id, [])
+            return f"{self.concept_kb_dir}/{user_id}/{files[index]}"
 
     def retrieve_concept(
         self, user_id: str, concept_name: str, max_retrieval_distance: float = 0.5
@@ -647,6 +654,7 @@ class AgentManager:
             child_name,
             parent_name,
             child_max_retrieval_distance,
+            temp = True
         )
         if streaming:
             return f"Hyponym {child_name} added to {parent_name}\n\n"
@@ -670,6 +678,7 @@ class AgentManager:
             "add_concept_negatives",
             concept_name,
             concept_examples,
+            temp = True
         )
         if streaming:
             yield f"status: Add negative examples successfully time: {time.time() - time_start}\n\n"
@@ -689,6 +698,7 @@ class AgentManager:
             component_concept_name,
             concept_name,
             component_max_retrieval_distance,
+            temp = True
         )
         if streaming:
             return f"Component {component_concept_name} added to {concept_name}\n\n"
@@ -810,6 +820,7 @@ class AgentManager:
             "add_concept_examples",
             examples=concept_examples,
             concept_name=concept_name,
+            temp = True
         )
 
         if streaming:

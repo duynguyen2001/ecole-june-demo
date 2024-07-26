@@ -146,7 +146,7 @@ async def predict_from_subtree(
 async def predict_hierarchical(
     user_id: str,  # Required field
     image: UploadFile = File(...),  # Required file upload,
-    unk_threshold: str = "0.7",
+    unk_threshold: str = "0.5",
     include_component_concepts: str = "False",
     streaming: str = "false",
     show_explanation: str = "false"
