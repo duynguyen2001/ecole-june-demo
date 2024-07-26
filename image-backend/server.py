@@ -93,6 +93,9 @@ async def predict_from_subtree(
 ):
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
 
         async def streamer(img, root_concept_name, unk_threshold):
             time_start = time.time()
@@ -125,6 +128,9 @@ async def predict_from_subtree(
         # Convert to PIL Image
         img = PIL.Image.open(image.file)
         img = img.convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
         try:
             result = app.state.agentmanager.predict_from_subtree(
                 user_id, img, root_concept_name, float(unk_threshold)
@@ -154,6 +160,9 @@ async def predict_hierarchical(
     logger.info(f"streaming: {streaming}")
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
 
         async def streamer(img, unk_threshold, include_component_concepts, show_explain):
             time_start = time.time()
@@ -227,6 +236,9 @@ async def predict_root_concept(
 ):
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
 
         async def streamer(img, unk_threshold):
             time_start = time.time()
@@ -286,6 +298,9 @@ async def is_concept_in_image(
 ):
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
 
         async def streamer(img, concept_name, unk_threshold):
             time_start = time.time()
@@ -315,6 +330,9 @@ async def is_concept_in_image(
         # Convert to PIL Image
         img = PIL.Image.open(image.file)
         img = img.convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
         try:
             result = app.state.agentmanager.is_concept_in_image(
                 user_id, img, concept_name, float(unk_threshold)
@@ -413,6 +431,10 @@ def heatmap_class_difference(
 
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB") if image is not None else None
+        
+        # if width of image is greater than 500, resize to 500
+        if img and img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
 
         async def streamer(concept1_name, concept2_name, img):
             time_start = time.time()
@@ -449,6 +471,10 @@ def heatmap_class_difference(
         )
     else:
         img = PIL.Image.open(image.file).convert("RGB") if image is not None else None
+        
+        # if width of image is greater than 500, resize to 500
+        if img and img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
         try:
             result = app.state.agentmanager.heatmap_class_difference(
                 user_id,
@@ -489,6 +515,9 @@ def heatmap(
     logger.info(f"streaming: {streaming}")
     if streaming == "true":
         img = PIL.Image.open(image.file).convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
 
         async def streamer(img, concept_name):
             time_start = time.time()
@@ -523,6 +552,9 @@ def heatmap(
         )
     else:
         img = PIL.Image.open(image.file).convert("RGB")
+        # if width of image is greater than 500, resize to 500
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
         try:
             result = app.state.agentmanager.heatmap(
                 user_id,
@@ -739,6 +771,11 @@ async def add_examples(
 ):
 
     processed_images = [PIL.Image.open(image.file).convert("RGB") for image in images]
+    # if width of image is greater than 500, resize to 500
+    for img in processed_images:
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
+    
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):
@@ -786,6 +823,10 @@ async def add_concept_negatives(
     processed_images = [
         PIL.Image.open(negative.file).convert("RGB") for negative in images
     ]
+    # if width of image is greater than 500, resize to 500
+    for img in processed_images:
+        if img.size[0] > 500:
+            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):
@@ -969,6 +1010,9 @@ def undo_concept_kb(user_id: str, streaming: str = "false"):
 @app.post("/images")
 def upload_image(image: UploadFile = File(...)):
     img = PIL.Image.open(image.file)
+    # if width of image is greater than 500, resize to 500
+    if img.size[0] > 500:
+        img = img.resize((500, int(500 * img.size[1] / img.size[0])))
     img.save(os.path.join(IMAGE_DIR, image.filename))
     return {"filename": image.filename}
 
