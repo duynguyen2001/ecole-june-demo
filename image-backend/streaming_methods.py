@@ -254,7 +254,7 @@ def format_prediction_result(
             image_block(component_concept_heatmaps, list(component_concept_names))
         )
     else:
-        nodes.append("No component concepts found")
+        nodes.append("No named parts found")
     return nodes
 
 
