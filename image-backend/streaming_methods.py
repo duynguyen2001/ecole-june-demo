@@ -247,7 +247,7 @@ def format_prediction_result(
             sigmoided=True,
         )
     )
-    nodes.append("### Component Concepts")
+    nodes.append("### Named Parts")
     if component_concept_heatmaps:
         # nodes.append(barchart_md_template(component_concept_scores, component_concept_names, 'Component Concepts Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True) )
         nodes.append(
