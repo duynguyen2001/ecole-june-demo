@@ -772,9 +772,11 @@ async def add_examples(
 
     processed_images = [PIL.Image.open(image.file).convert("RGB") for image in images]
     # if width of image is greater than 500, resize to 500
-    for img in processed_images:
-        if img.size[0] > 500:
-            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
+    # for i, img in enumerate(processed_images):
+    #     if img.size[0] > 500:
+    #         img = img.resize((500, int(500 * img.size[1] / img.size[0])))
+    #         processed_images[i] = img
+            
     
     if streaming == "true":
 
@@ -824,9 +826,10 @@ async def add_concept_negatives(
         PIL.Image.open(negative.file).convert("RGB") for negative in images
     ]
     # if width of image is greater than 500, resize to 500
-    for img in processed_images:
-        if img.size[0] > 500:
-            img = img.resize((500, int(500 * img.size[1] / img.size[0])))
+    # for i, img in enumerate(processed_images):
+    #     if img.size[0] > 500:
+    #         img = img.resize((500, int(500 * img.size[1] / img.size[0])))
+    #         processed_images[i] = img
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):

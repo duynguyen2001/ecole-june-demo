@@ -24,6 +24,7 @@ from controller import Controller
 from controller.train.train_parallel import ConcurrentTrainingConceptSelector
 from kb_ops import ConceptKBTrainer
 from kb_ops.caching.cacher import ConceptKBFeatureCacher
+from kb_ops.concurrency.locking.lock_generators import LockType
 from kb_ops.dataset import FeatureDataset, extend_with_global_negatives
 from kb_ops.feature_pipeline import ConceptKBFeaturePipeline
 from kb_ops.retrieve import CLIPConceptRetriever
@@ -146,7 +147,16 @@ class ExtendedController(Controller):
         if torch.cuda.is_available():
             num_gpus = torch.cuda.device_count()
             AGENT_GPU_LIST = list(range(num_gpus))
-            self.train_concepts_parallel(concept_names=concept_names, n_epochs=n_epochs, use_concepts_as_negatives=use_concepts_as_negatives, max_retrieval_distance=max_retrieval_distance, concepts_to_train_kwargs=concepts_to_train_kwargs, devices = AGENT_GPU_LIST, **train_concept_kwargs)
+            self.train_concepts_parallel(
+                concept_names=concept_names,
+                n_epochs=n_epochs,
+                use_concepts_as_negatives=use_concepts_as_negatives,
+                max_retrieval_distance=max_retrieval_distance,
+                concepts_to_train_kwargs=concepts_to_train_kwargs,
+                devices=AGENT_GPU_LIST,
+                lock_type=LockType.READERS_WRITERS_LOCK,
+                **train_concept_kwargs,
+            )
 
         print("Training complete.")
 
