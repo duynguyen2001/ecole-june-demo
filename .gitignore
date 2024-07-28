@@ -18,3 +18,4 @@ image-backend/feature_cache/*
 .env
 */.env
 lock_dir/*
+json_dir/*
