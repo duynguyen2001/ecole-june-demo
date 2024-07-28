@@ -154,7 +154,7 @@ class ExtendedController(Controller):
                 max_retrieval_distance=max_retrieval_distance,
                 concepts_to_train_kwargs=concepts_to_train_kwargs,
                 devices=AGENT_GPU_LIST,
-                lock_type=LockType.READERS_WRITERS_LOCK,
+                lock_type=LockType.FILE_LOCK,
                 **train_concept_kwargs,
             )
 
