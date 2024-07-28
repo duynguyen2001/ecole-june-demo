@@ -30,6 +30,9 @@ IMAGE_DIR = os.environ.get(
 TENSOR_DIR = os.environ.get(
     "TENSOR_DIR", "/shared/nas2/knguye71/ecole-june-demo/tensor_dir"
 )
+JSON_DIR = os.environ.get(
+    "JSON_DIR", "/shared/nas2/knguye71/ecole-june-demo/json_dir"
+)
 CONCEPT_KB_CKPT = os.environ.get(
     "CONCEPT_KB_CKPT", "/shared/nas2/knguye71/ecole-june-demo/conceptKB_ckpt"
 )
@@ -66,6 +69,7 @@ from feature_extraction.trained_attrs import N_ATTRS_DINO
 from image_processing import build_localizer_and_segmenter
 from model.concept import (ConceptExample, ConceptKB, ConceptKBConfig,
                            concept_kb)
+from streaming_methods import streaming_concept_kb
 
 
 class Agent:
@@ -838,7 +842,10 @@ class AgentManager:
         logger.info(f"\n\nconcept_names: {concept_names}\n\n")
         try:
             if streaming:
-                yield f"status: Training concepts...\n\n"
+                for msg in streaming_concept_kb(self.get_concept_kb(user_id, get_temp=True)):
+                    yield msg
+                yield f"status: Start training concepts...\n\n"
+
                 # Start the status thread
                 running_thread = threading.Thread(target=self.executeControllerFunctionWithSave, args=(user_id, "train_concepts", concept_names,), kwargs=train_concept_kwargs)
 

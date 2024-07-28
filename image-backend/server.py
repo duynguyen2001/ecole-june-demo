@@ -24,7 +24,7 @@ import torch
 torch.autograd.set_detect_anomaly(True)
 
 import PIL.Image
-from agent_manager import IMAGE_DIR, TENSOR_DIR, AgentManager
+from agent_manager import IMAGE_DIR, JSON_DIR, TENSOR_DIR, AgentManager
 ################
 # FastAPI      #
 ################
@@ -781,7 +781,7 @@ async def add_examples(
     if streaming == "true":
 
         async def streamer(user_id, concept_name, imgs):
-            yield "status: Adding examples...\n\n"
+            # yield "status: Adding examples...\n\n"
             try:
                 async for msg in app.state.agentmanager.add_examples(
                     user_id, imgs, concept_name, streaming=streaming
@@ -794,7 +794,8 @@ async def add_examples(
                 logger.error(traceback.format_exc())
                 logger.error(sys.exc_info())
                 yield f"error: {str(e)}"
-            yield "result: Examples added\n\n"
+            # yield "result: Examples added\n\n"
+            yield "result: \n\n"
 
         return StreamingResponse(
             streamer(user_id, concept_name, processed_images),
@@ -957,7 +958,7 @@ async def train_concepts(
 ):
 
     async def streamer(user_id, cncpts):
-        yield "status: \nTraining concepts...\n"
+        # yield "status: \nTraining concepts...\n"
         try:
             time_start = time.time()
             async for res in app.state.agentmanager.train_concepts(user_id, cncpts, streaming=streaming):
@@ -1033,6 +1034,14 @@ def get_tensor(uid):
     )
 
 import asyncio
+
+
+@app.get("/json/{uid}", tags=["data_ops"])
+def get_json(uid):
+    filename = f"{uid}.json"
+    return FileResponse(
+        os.path.join(JSON_DIR, filename), media_type="application/json"
+    )
 
 
 @app.post("/healthcheck")

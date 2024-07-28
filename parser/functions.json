@@ -232,7 +232,7 @@
         ]
     },
     {
-        "title": "There are {part_name}. The {class_name} has the component of {part_name}",
+        "title": "This is a {part_name}. {class_name} has {part_name}.",
         "type": "training",
         "image_required": true,
         "params": [

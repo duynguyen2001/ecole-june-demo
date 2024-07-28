@@ -20,6 +20,9 @@ IMAGE_DIR = os.environ.get(
 TENSOR_DIR = os.environ.get(
     "TENSOR_DIR", "/shared/nas2/knguye71/ecole-june-demo/tensor_dir"
 )
+JSON_DIR = os.environ.get(
+    "JSON_DIR", "/shared/nas2/knguye71/ecole-june-demo/json_dir"
+)
 import logging
 
 logger = logging.getLogger("uvicorn.error")
@@ -91,7 +94,13 @@ def upload_image_and_return_id(image: PIL.Image.Image):
     image.save(image_path)
     return image_id
 
-
+def upload_json_and_return_id(json_data: dict):
+    json_id = str(uuid.uuid4())
+    os.makedirs(JSON_DIR, exist_ok=True)
+    json_path = os.path.join(JSON_DIR, f"{json_id}.json")
+    with open(json_path, "w") as f:
+        json.dump(json_data, f)
+    return json_id
 def upload_binary_tensor_and_return_id(tensor: torch.Tensor) -> str:
     """
     Uploads a binary tensor to the local storage and returns the tensor id and shape.
@@ -634,9 +643,10 @@ def streaming_concept_kb(concept_kb: ConceptKB) -> Generator[str, None, None]:
         "containing_concepts": containing_concepts,
         "component_concepts": component_concepts,
     }
-
+    json_id = upload_json_and_return_id(concept_kb_dict)
+    ret_dict = {"id": json_id}
     yield f"""result: ```concept-graph
-{json.dumps(concept_kb_dict, indent=0)}
+{json.dumps(ret_dict, indent=0)}
 ```
 
 """
