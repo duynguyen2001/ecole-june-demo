@@ -39,7 +39,8 @@ torch.autograd.set_detect_anomaly(True)
 #     "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_05-20:23:53-yd491eo3-all_planes_and_guns-infer_localize/concept_kb_epoch_50.pt",
 # )
 # DEFAULT_CKPT = "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_06_06-23:31:12-8ckp59v8-all_planes_and_guns/concept_kb_epoch_50.pt"
-DEFAULT_CKPT = "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_07_23-02:35:55-all_planes_and_guns_v3-rm_bg_with_component_rm_bg_containing_positives/concept_kb_epoch_487.pt"
+# DEFAULT_CKPT = "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_07_23-02:35:55-all_planes_and_guns_v3-rm_bg_with_component_rm_bg_containing_positives/concept_kb_epoch_487.pt"
+DEFAULT_CKPT = "/shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb/2024_07_31-13:35:28-0aeepf7x-all_planes_and_guns_v4/concept_kb_epoch_496.pt"
 CACHE_DIR = "/shared/nas2/knguye71/ecole-june-demo/cache"
 logger = logging.getLogger("uvicorn.access")
 
