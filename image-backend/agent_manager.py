@@ -572,6 +572,9 @@ class AgentManager:
         concept_name = concept_name.strip()
         concept_kb = self.get_concept_kb(user_id)
         if concept_name in concept_kb:
+            # move concept kb to cpu
+            for concept in concept_kb:
+                concept.predictor.to("cpu")
             return concept_kb[concept_name]
 
         elif concept_name.lower() in concept_kb:
@@ -889,9 +892,21 @@ class AgentManager:
     ):
         logger.info(str(f"heatmap_class_difference: {concept1_name} - {concept2_name}"))
         logger.info(str(f"heatmap_class_difference: {image}"))
-        result = self.executeControllerFunctionNoSave(
+        rst = {}
+        if concept1_name and concept2_name:
+            rst["concept1"]: Concept = self.retrieve_concept(user_id, concept1_name)
+            rst["concept2"]: Concept = self.retrieve_concept(user_id, concept2_name)
+            if (
+                rst["concept1"].component_concepts.__len__() > 0
+                and rst["concept2"].component_concepts.__len__() > 0
+            ):
+                return rst
+
+        result =  self.executeControllerFunctionNoSave(
             user_id, "heatmap_class_difference", concept1_name, concept2_name, image
         )
+        result["concept1"] = rst["concept1"]
+        result["concept2"] = rst["concept2"]
         return result
 
     def heatmap(

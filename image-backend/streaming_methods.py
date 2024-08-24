@@ -2,6 +2,7 @@ import base64
 import math
 import os
 import uuid
+from email.mime import image
 from typing import Any, Generator
 
 import numpy as np
@@ -9,10 +10,13 @@ import PIL
 import PIL.Image
 import torch
 from kb_ops.predict import PredictOutput
+from model import concept
+from model.concept.concept import Concept
 from model.concept.concept_kb import ConceptKB
 from server_utils import (convert_bool_tensor_to_byte_string,
                           convert_PIL_Image_to_base64_string)
-from sympy import false
+from sympy import QQ, false, hyper
+from textblob import TextBlob
 
 IMAGE_DIR = os.environ.get(
     "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
@@ -20,9 +24,7 @@ IMAGE_DIR = os.environ.get(
 TENSOR_DIR = os.environ.get(
     "TENSOR_DIR", "/shared/nas2/knguye71/ecole-june-demo/tensor_dir"
 )
-JSON_DIR = os.environ.get(
-    "JSON_DIR", "/shared/nas2/knguye71/ecole-june-demo/json_dir"
-)
+JSON_DIR = os.environ.get("JSON_DIR", "/shared/nas2/knguye71/ecole-june-demo/json_dir")
 import logging
 
 logger = logging.getLogger("uvicorn.error")
@@ -94,6 +96,7 @@ def upload_image_and_return_id(image: PIL.Image.Image):
     image.save(image_path)
     return image_id
 
+
 def upload_json_and_return_id(json_data: dict):
     json_id = str(uuid.uuid4())
     os.makedirs(JSON_DIR, exist_ok=True)
@@ -101,6 +104,8 @@ def upload_json_and_return_id(json_data: dict):
     with open(json_path, "w") as f:
         json.dump(json_data, f)
     return json_id
+
+
 def upload_binary_tensor_and_return_id(tensor: torch.Tensor) -> str:
     """
     Uploads a binary tensor to the local storage and returns the tensor id and shape.
@@ -185,85 +190,65 @@ def format_prediction_result(
     predicted_concept_components_heatmaps = output.predicted_concept_components_heatmaps
     component_concept_heatmaps = None
     if predicted_concept_components_heatmaps:
-        component_concept_heatmaps = list(
-            predicted_concept_components_heatmaps.values()
-        )
+        tup_list = list(predicted_concept_components_heatmaps.values())
+        component_concept_heatmaps = [tup[0] for tup in tup_list]
+        score_list = [tup[1] for tup in tup_list]
 
-    if segmentations := output.segmentations:
-        masks = segmentations.part_masks
-        attr_names = LIST_DINO_ATTR
-        region_general_attributes = []
-        for index in range(len(masks)):
-            region_general_attribute_mask = {
-                attr: mask_scores[index][j] for j, attr in enumerate(attr_names)
-            }
-            region_general_attribute_mask = dict(
-                sorted(
-                    region_general_attribute_mask.items(),
-                    key=lambda x: x[1],
-                    reverse=True,
-                )[:top_k]
-            )
-            # filter only the score greater than 0.5
-            region_general_attribute_mask = {
-                k: v for k, v in region_general_attribute_mask.items() if v >= 0.6
-            }
-
-            region_general_attributes.append(region_general_attribute_mask)
-
-    if img_trained_attr_scores:
-        img_trained_attr_scores = dict(zip(attr_names, img_trained_attr_scores))
-        img_trained_attr_scores = dict(
-            sorted(img_trained_attr_scores.items(), key=lambda x: x[1], reverse=True)[
-                :top_k
+    if component_concept_heatmaps and len(component_concept_heatmaps) > 0:
+        if score_list:
+            names = list(component_concept_names)
+            indexes_equals_1 = [i for i, score in enumerate(score_list) if score == 1]
+            indexes_equals_0_5 = [
+                i for i, score in enumerate(score_list) if score == 0.5
             ]
-        )
-        # filter only the score greater than 0.5
-        img_trained_attr_scores = {
-            k: v for k, v in img_trained_attr_scores.items() if v >= 0.6
-        }
-        
-    nodes.append(
-        image_with_mask_md_template(
-            segmentations["input_image"],
-            masks,
-            general_attributes=region_general_attributes,
-            general_attributes_image=img_trained_attr_scores,
-        )
-        if segmentations
-        and segmentations["input_image"]
-        and region_general_attributes
-        and len(masks)
-        and img_trained_attr_scores
-        else ""
-    )
-    nodes.append(
-        correct_grammar(f'There is a  "{predicted_label}" in the image\n\n')
-        if predicted_label and predicted_label != "unknown"
-        else "I do not know what object is in the image\n\n"
-    )
-    nodes.append("### Concept Scores")
-    nodes.append(
-        barchart_md_template(
-            output["predictors_scores"].tolist(),
-            output["concept_names"],
-            "Concept Scores",
-            "Scores",
-            "Concepts",
-            0.1,
-            rev_list,
-            sort=True,
-            sigmoided=True,
-        )
-    )
-    nodes.append("### Named Parts")
-    if component_concept_heatmaps:
-        # nodes.append(barchart_md_template(component_concept_scores, component_concept_names, 'Component Concepts Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True) )
-        nodes.append(
-            image_block(component_concept_heatmaps, list(component_concept_names))
-        )
+            return_string = ""
+
+            return_string += f"This is a(n) {predicted_label} because "
+            if indexes_equals_1 and len(indexes_equals_1) > 0:
+                return_string += (
+                    f"it has {len(indexes_equals_1)} parts that are indicative of a(n) '{predicted_label}': "
+                )
+                nodes.append(correct_grammar(return_string))
+                nodes.append(
+                    image_block(
+                        [component_concept_heatmaps[i] for i in indexes_equals_1],
+                        [names[index] for index in indexes_equals_1],
+                        hyperlink=True,
+                    )
+                )
+
+            if indexes_equals_0_5 and len(indexes_equals_0_5) > 0:
+                if len(indexes_equals_1) > 0:
+                    nodes.append(
+                        correct_grammar(
+                            f"Also, it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': "
+                        )
+                    )
+                else:
+                    return_string += (
+                        f"it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': " 
+                    )
+                    nodes.append(correct_grammar(return_string))
+
+                nodes.append(
+                    image_block(
+                        [component_concept_heatmaps[i] for i in indexes_equals_0_5],
+                        [names[index] for index in indexes_equals_0_5],
+                        hyperlink=True,
+                    )
+                )
+
     else:
-        nodes.append("No named parts found")
+        if not predicted_label or predicted_label == "unknown":
+            nodes.append("I do not know what object is in the image\n\n")
+        else:
+            nodes.append(
+                correct_grammar(
+                    f'This is a  "{predicted_label}" in the image, because of these highlighted regions: \n\n'
+                )
+            )
+            nodes.append(image_block([output.concept_heatmap[0]], names=[predicted_label]))
+
     return nodes
 
 
@@ -322,14 +307,15 @@ async def streaming_hierachical_predict_result(
                         }
                     )
                 best_node = sorted_data[0]
-                nodes.append(f"""result: ### {best_node[0]}\n\n""")
-                nodes.extend(
-                    [
-                        f"result: {res}"
-                        for res in format_prediction_result(pred, rev_dict)
-                        if res
-                    ]
-                )
+                if best_node and best_node[1] > 0.0:
+                    nodes.append(f"""result: ### {best_node[0]}\n\n""")
+                    nodes.extend(
+                        [
+                            f"result: {res}"
+                            for res in format_prediction_result(pred, rev_dict)
+                            if res
+                        ]
+                    )
 
             yield "result: " + decision_tree_md_template(decision_tree) + "\n\n"
             # stream nodes
@@ -337,7 +323,7 @@ async def streaming_hierachical_predict_result(
                 yield node
 
 
-def image_block(images: PIL.Image.Image, names: list[str] = []):
+def image_block(images: PIL.Image.Image, names: list[str] = [], hyperlink: bool = False):
     """
     Implements:
         images: Show the images.
@@ -353,7 +339,8 @@ def image_block(images: PIL.Image.Image, names: list[str] = []):
     for image in images:
         image_id = upload_image_and_return_id(image)
         image_id_list.append(image_id)
-    return f"""result: ```images
+        
+    return f"""result: ```{'images' if not hyperlink else 'hyperlink-images'}
 {{
   "images": {image_id_list},
   "names": {names}
@@ -363,7 +350,7 @@ def image_block(images: PIL.Image.Image, names: list[str] = []):
 
 
 def streaming_heatmap_class_difference(
-    output: dict, concept_1: str, concept_2: str, img: PIL.Image.Image
+    output: dict, concept_1_name: str, concept_2_name: str, img: PIL.Image.Image | None
 ) -> Generator[str, None, None]:
     """
     If image is provided, implements:
@@ -375,29 +362,99 @@ def streaming_heatmap_class_difference(
 
     """
     if img is None:
-        yield f"result: The difference between the two concepts of {concept_1} and {concept_2}  is highlighted in the two example images.\n\n"
 
-        c1_minus_c2_image1 = output["concept1_minus_concept2_on_concept1_image"]
-        c2_minus_c1_image1 = output["concept2_minus_concept1_on_concept1_image"]
-        c1_minus_c2_image2 = output["concept1_minus_concept2_on_concept2_image"]
-        c2_minus_c1_image2 = output["concept2_minus_concept1_on_concept2_image"]
+        concept_1: Concept = output["concept1"]
+        concept_2: Concept = output["concept2"]
 
-        yield f"""result: The highlighted regions in the first image are the regions that are more likely to be a {concept_1} than a {concept_2} and the highlighted regions in the second image are the regions that are more likely to be a {concept_2} than a {concept_1}.\n\n"""
-        yield image_block(
-            [c1_minus_c2_image1, c2_minus_c1_image1],
-            names=[concept_1 + " predictor", concept_2 + " predictor"],
-        )
+        if concept_1.name == "unknown" or concept_2.name == "unknown":
+            if concept_1.name == "unknown" and concept_2.name == "unknown":
+                yield "result: I do not know what object is in the first and second image.\n\n"
+            elif concept_1.name == "unknown":
+                yield "result: I do not know what object is in the first image.\n\n"
+            else:
+                yield "result: I do not know what object is in the second image.\n\n"
+        elif concept_1.name == concept_2.name:
+            yield f"""result: I predict that the object in the first image and the object in the second image are both a {concept_1.name}.\n\n"""
+        elif concept_1.component_concepts.__len__() > 0 and concept_2.component_concepts.__len__() > 0:
+            diff_components_1 = set(concept_1.component_concepts.keys()).difference(set(concept_2.component_concepts.keys()))
+            diff_components_2 = set(concept_2.component_concepts.keys()).difference(set(concept_1.component_concepts.keys()))
 
-        yield f"""result: The highlighted regions in the third image are the regions that are more likely to be a {concept_2} than a {concept_1} and the highlighted regions in the fourth image are the regions that are more likely to be a {concept_1} than a {concept_2}.\n\n"""
-        yield image_block(
-            [c1_minus_c2_image2, c2_minus_c1_image2],
-            names=[concept_1 + " predictor", concept_2 + " predictor"],
-        )
+            if diff_components_1.__len__() > 0 and diff_components_2.__len__() > 0:
+                yield f"""result: The two concepts have different parts. The parts that are unique to the "{concept_1.name}" are: """
+                yield image_block([PIL.Image.open(concept_1.component_concepts[component].examples[0].image_path).convert('RGB') for component in diff_components_1], names=[component for component in diff_components_1], hyperlink=True)
+                yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
+                yield image_block(
+                    [
+                        PIL.Image.open(
+                            concept_2.component_concepts[component]
+                            .examples[0]
+                            .image_path
+                        ).convert("RGB")
+                        for component in diff_components_2
+                    ],
+                    names=[component for component in diff_components_2],
+                    hyperlink=True,
+                )
+            elif diff_components_1.__len__() > 0:
+                yield f"""result: The parts that are unique to the "{concept_1.name}" are: """
+                yield image_block(
+                    [
+                        PIL.Image.open(
+                            concept_1.component_concepts[component]
+                            .examples[0]
+                            .image_path
+                        ).convert("RGB")
+                        for component in diff_components_1
+                    ],
+                    names=[component for component in diff_components_1],
+                    hyperlink=True,
+                )
+                yield f"""In contrast, the highlighted regions that are more likely to be a {concept_2.name} than a {concept_1.name}: \n\n"""
+                yield image_block([output["concept2_minus_concept1_on_concept1_image"]], names=[concept_2.name])
+
+            elif diff_components_2.__len__() > 0:
+                yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
+                yield image_block(
+                    [
+                        PIL.Image.open(
+                            concept_2.component_concepts[component]
+                            .examples[0]
+                            .image_path
+                        ).convert("RGB")
+                        for component in diff_components_2
+                    ],
+                    names=[component for component in diff_components_2],
+                    hyperlink=True,
+                )
+                yield f"""In contrast, the highlighted regions that are more likely to be a "{concept_1.name}" than a "{concept_2.name}" is: \n\n"""
+                yield image_block([output["concept1_minus_concept2_on_concept1_image"]], names=[concept_1.name])
+            else:
+                yield f"""result: The two concepts have the same parts. \n\n"""
+        else:
+
+            # yield f"result: The difference between the two concepts of {concept_1.name} and {concept_2.name}  is highlighted in the two example images.\n\n"
+
+            c1_minus_c2_image1 = output["concept1_minus_concept2_on_concept1_image"]
+            c2_minus_c1_image1 = output["concept2_minus_concept1_on_concept1_image"]
+            c1_minus_c2_image2 = output["concept1_minus_concept2_on_concept2_image"]
+            c2_minus_c1_image2 = output["concept2_minus_concept1_on_concept2_image"]
+
+            yield f"""result: The highlighted regions in the this image are the regions that are more likely to be a "{concept_1.name}" than a "{concept_2.name}"\n\n"""
+            yield image_block(
+                [c1_minus_c2_image1],
+                names=[concept_1.name],
+            )
+
+            yield f"""result: The highlighted regions in the this image are the regions that are more likely to be a "{concept_2.name}" than a "{concept_1.name}"\n\n"""
+            yield image_block(
+                [c2_minus_c1_image2],
+                names=[concept_2.name],
+            )
     else:
         concept1_minus_concept2 = output["concept1_minus_concept2"]
         concept2_minus_concept1 = output["concept2_minus_concept1"]
-        yield f"result: The difference between the two concepts of {concept_1} and {concept_2}  is highlighted in the image.\n\n"
-        yield f"""result: The highlighted regions in the first image are the regions that are more likely to be a {concept_1} than a {concept_2} and vice versa.\n\n"""
+        yield f"result: The difference between the two concepts of {concept_1_name} and {concept_2_name}  is highlighted in the image.\n\n"
+        yield f"""result: The highlighted regions in the first image are the regions that are more likely to be a {concept_1_name} than a {concept_2_name} and vice versa.\n\n"""
 
         yield image_block(
             [concept1_minus_concept2, concept2_minus_concept1],

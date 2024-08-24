@@ -62,8 +62,9 @@ class ExtendedController(Controller):
         for pred in prediction_path:
             component_concepts = pred.predicted_concept_components_to_scores.keys()
             pred.predicted_concept_components_heatmaps = {
-                concept: self.heatmap(image, concept) for concept in component_concepts
+                concept: self.heatmap(image, concept, return_detection_score=True) for concept in component_concepts
             }
+            pred.concept_heatmap = self.heatmap(image, pred.predicted_label, return_detection_score=True)
 
         if prediction_path[-1]["is_below_unk_threshold"]:
             predicted_label = (
