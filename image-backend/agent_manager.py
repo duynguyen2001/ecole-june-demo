@@ -33,6 +33,9 @@ TENSOR_DIR = os.environ.get(
 JSON_DIR = os.environ.get(
     "JSON_DIR", "/shared/nas2/knguye71/ecole-june-demo/json_dir"
 )
+VIDEO_DIR = os.environ.get(
+    "VIDEO_DIR", "/shared/nas2/knguye71/ecole-june-demo/video_dir"
+)
 CONCEPT_KB_CKPT = os.environ.get(
     "CONCEPT_KB_CKPT", "/shared/nas2/knguye71/ecole-june-demo/conceptKB_ckpt"
 )

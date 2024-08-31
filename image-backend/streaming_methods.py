@@ -15,8 +15,6 @@ from model.concept.concept import Concept
 from model.concept.concept_kb import ConceptKB
 from server_utils import (convert_bool_tensor_to_byte_string,
                           convert_PIL_Image_to_base64_string)
-from sympy import QQ, false, hyper
-from textblob import TextBlob
 
 IMAGE_DIR = os.environ.get(
     "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
@@ -724,3 +722,88 @@ def streaming_checkpoint_list(checkpoint_list: list[str]) -> Generator[str, None
         checkpoint_time = checkpoint.strip().split("_")[-1].split(".")[0]
         yield f"result: ## Checkpoint {idx}\n\n"
         yield f"result: {checkpoint}\n\n"
+
+
+##################################
+# Video System Streaming Methods #
+##################################
+def table_md_template(
+    data: list[dict[str, Any]], title: str, headers: list[str]
+) -> str:
+    return (
+        "```table\n{"
+        + f"""
+  "title": "{title}",
+  "headers": {headers},
+  "data": {data}
+"""
+        + "}\n```"
+    )
+def video_result_md_template(
+    objects: dict[str, list[list[str]]],
+    relations: list[str],
+    blended_imgs_in_base64: list[str],
+):
+    # save blended images to local storage and return the image id
+    image_ids = []
+    image_id = str(uuid.uuid4())
+    for idx, img in enumerate(blended_imgs_in_base64):
+        image_path = os.path.join(IMAGE_DIR, f"{image_id}_for_frame_{idx}.jpg")
+        with open(image_path, "wb") as f:
+            f.write(base64.b64decode(img))
+        image_ids.append(image_id)
+        
+    return f"""
+```video-result
+{{
+    "objects": {objects},
+    "relations": {relations},
+    "blended_imgs": {image_ids}
+}}
+```
+"""
+    
+def streaming_video_system_result(output: dict) -> Generator[str, None, None]:
+    if "sims" in output:
+        action_score: dict[str, float] = output["sims"]
+        print("action_score", action_score)
+        # filter out actions with score < 0.5
+        action_score = {k: v for k, v in action_score.items() if v >= 0.16}
+        # Sort from highest to lowest similarity
+        action_score = dict(sorted(action_score.items(), key=lambda item: item[1], reverse=True))
+        if action_score and len(action_score) > 0:
+            ret_str =  f"result: The actions detected in the video are: "
+            for action, score in action_score.items():
+                ret_str += f"{action} ({score:.2f}%), "
+            yield ret_str[:-2] + ".\n\n"
+            yield f"result: {table_md_template([action_score], 'Action Scores', ['Actions'])}\n\n"
+            
+        else:
+            yield f"result: No actions are detected in the video.\n\n"
+
+    if "state_tracking" in output:
+        state_tracking = output["state_tracking"]
+        frames = state_tracking["frames"]
+
+        object_headers = set()
+        object_data = dict()
+        rel_data = list()
+        
+        for idx, frame in enumerate(frames):
+            objects: list[dict[str, str]] = frame["objects"]
+            relations: list[dict[str,str]] = frame["relations"]
+
+            if objects and len(objects) > 0:
+                headers = [obj["name"] for obj in objects]
+                object_headers.update(headers)
+                for idx, obj in enumerate(objects):
+                    if obj["name"] not in object_data:
+                        object_data[obj["name"]] = [""] * len(frames)
+                    object_data[obj["name"]].append("\n".join([f"{k}: {v}" for k, v in obj.items() if k != "name"]))
+
+            if relations and len(relations) > 0:
+                relations  = [" - ".join([rel["subject"], rel["relation"], rel["object"]]) for rel in relations]
+                rel_data.extend(relations)
+
+        blended_imgs = output["blended_imgs"]
+        yield f"result: {video_result_md_template(object_data, rel_data, blended_imgs)}\n\n"

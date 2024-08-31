@@ -1,6 +1,7 @@
 # %%
 
 import os
+import re
 
 tmp_dir = "/scratch/tmp"
 os.makedirs(tmp_dir, exist_ok=True)
@@ -24,7 +25,8 @@ import torch
 torch.autograd.set_detect_anomaly(True)
 
 import PIL.Image
-from agent_manager import IMAGE_DIR, JSON_DIR, TENSOR_DIR, AgentManager
+from agent_manager import (IMAGE_DIR, JSON_DIR, TENSOR_DIR, VIDEO_DIR,
+                           AgentManager)
 ################
 # FastAPI      #
 ################
@@ -35,6 +37,7 @@ from streaming_methods import (streaming_concept_kb, streaming_diff_images,
                                streaming_heatmap,
                                streaming_heatmap_class_difference,
                                streaming_hierachical_predict_result,
+                               streaming_video_system_result,
                                yield_nested_objects)
 
 logger = logging.getLogger("uvicorn.error")
@@ -1057,7 +1060,158 @@ async def healthcheck():
         streamer(),
         media_type="text/event-stream",
     )
+
     
+import shutil
+import uuid
+
+#####################
+# Video System APIs #
+#####################
+import requests
+from fastapi import FastAPI, File, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
+from moviepy.editor import VideoFileClip
+
+
+# Upload video API
+@app.post("/videos/", tags=["video"])
+def upload_video(file: UploadFile = File(...)):
+    video_id = str(uuid.uuid4())
+    filename = f"{video_id}.mp4"
+    
+    # check if the video directory exists
+    os.makedirs(VIDEO_DIR, exist_ok=True)
+    temp_path = os.path.join(VIDEO_DIR, filename)
+
+    # Save the uploaded video file temporarily
+    try:
+        with open(temp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        # If the uploaded file is not an mp4, convert it to mp4
+        if not filename.endswith(".mp4"):
+            video_id = str(uuid.uuid4())
+            converted_filename = f"{video_id}.mp4"
+            converted_path = os.path.join(VIDEO_DIR, converted_filename)
+            clip = VideoFileClip(temp_path)
+            clip.write_videofile(converted_path, codec="libx264")
+            clip.close()
+            os.remove(temp_path)  # Remove the original file
+            final_path = converted_path
+        else:
+            final_path = temp_path
+            
+        # Clean up the converted file if necessary
+        if final_path != temp_path:
+            os.remove(final_path)
+        
+        return JSONResponse(content={"video_id": video_id})
+        
+    except Exception as e:
+        # Clean up any files in case of an error
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        converted_path = temp_path.replace(os.path.splitext(temp_path)[1], ".mp4")
+        if os.path.exists(converted_path) and converted_path != temp_path:
+            os.remove(converted_path)
+
+        import sys
+        import traceback
+        print(traceback.print_exc())
+        print(sys.exc_info())
+
+        return JSONResponse(content={"error": str(e)})
+    
+        
+
+async def get_video_range(video_content: bytes, start: int, end: int):
+    return video_content[start : end + 1]
+
+@app.get("/videos/{video_id}", tags=["video"])
+async def get_video(request: Request, video_id: str):
+    video_path = os.path.join(VIDEO_DIR, f"{video_id}.mp4")
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Read the video file
+    video_content = None
+    with open(video_path, "rb") as f:
+        video_content = f.read()
+        
+    if video_content is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    file_size = len(video_content)
+    range_header = request.headers.get("range")
+
+    if range_header:
+        range_start, range_end = range_header.replace("bytes=", "").split("-")
+        range_start = int(range_start)
+        range_end = int(range_end) if range_end else file_size - 1
+        content_length = range_end - range_start + 1
+
+        partial_content = await get_video_range(video_content, range_start, range_end)
+        headers = {
+            "Content-Range": f"bytes {range_start}-{range_end}/{file_size}",
+            "Content-Length": str(content_length),
+            "Accept-Ranges": "bytes",
+        }
+
+        return StreamingResponse(
+            content=iter([partial_content]),
+            media_type="video/mp4",
+            status_code=206,
+            headers=headers,
+        )
+    else:
+        return StreamingResponse(content=iter([video_content]), media_type="video/mp4")
+
+    
+
+VIDEO_SYSTEM_URL = "http://blender13.cs.illinois.edu:16006"
+@app.post("/video-inference/", tags=["video"])
+async def interference(
+    file: UploadFile = File(...),
+    text_input: str = "climbing, crawling, grasping, hiding, jumping, picking up, pulling, pushing, putting down, rolling, running, sliding, walking, explode, launch",
+):    
+    
+    files = {"file": file.file}
+    data = {"text_input": text_input}
+    response = requests.post(f"{VIDEO_SYSTEM_URL}/video-inference/", files=files, data=data)
+    if response.status_code == 200:
+        async def streamer(res):
+            if response.status_code == 200:
+                for res in streaming_video_system_result(res):
+                    yield res            
+        return StreamingResponse(
+            streamer(response.json()),
+            media_type="text/event-stream",
+        )
+
+    return JSONResponse(content=response.json())
+
+@app.post("/video-inference-by-id/{video_id}", tags=["video"])
+async def inference(video_id: str, text_input: str = "climbing, crawling, grasping, hiding, jumping, picking up, pulling, pushing, putting down, rolling, running, sliding, walking, explode, launch"):
+    video_path = os.path.join(VIDEO_DIR, f"{video_id}.mp4")
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    files = {"file": open(video_path, "rb")}
+    data = {"text_input": text_input}
+    response = requests.post(f"{VIDEO_SYSTEM_URL}/video-inference/", files=files, data=data)
+    if response.status_code == 200:
+        async def streamer(res):
+            if response.status_code == 200:
+                for res in streaming_video_system_result(res):
+                    yield res            
+        return StreamingResponse(
+            streamer(response.json()),
+            media_type="text/event-stream",
+        )
+
+    return JSONResponse(content=response.json())
+ 
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn')
