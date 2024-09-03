@@ -774,7 +774,7 @@ def streaming_video_system_result(output: dict) -> Generator[str, None, None]:
         if action_score and len(action_score) > 0:
             ret_str =  f"result: The actions detected in the video are: "
             for action, score in action_score.items():
-                ret_str += f"{action} ({score:.2f}%), "
+                ret_str += f"{action} ({(score * 100):.1f}%), "
             yield ret_str[:-2] + ".\n\n"
             yield f"result: {barchart_md_template(list(action_score.values()), list(action_score.keys()), 'Action Scores', 'Scores', 'Actions', 0.1, None, sort=True, sigmoided=True)}\n\n"
 
