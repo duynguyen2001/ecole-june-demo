@@ -90,7 +90,7 @@ async def make_requests(functions, params, images, code_blocks, user_id = "defau
     for function in functions:
         function_name = function["name"]
         args = function["args"]
-        extra_args = function.get("extra_args", {})            
+        extra_args = function.get("extra_args", {})
 
         # Make a request to the image backend API
         arg_dict = {}
@@ -120,7 +120,7 @@ async def make_requests(functions, params, images, code_blocks, user_id = "defau
             yield streaming_response_yield(
                 substitute_brackets(description, params) + "\n\n", counter
             )
-
+        
         async for msg in _make_request(function_name, arg_dict, image_upload_list, user_id, extra_args, callback, counter= counter):
             yield msg
     yield streaming_response_yield("success\n\n", counter)
