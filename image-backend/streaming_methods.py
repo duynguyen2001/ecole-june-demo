@@ -751,8 +751,8 @@ def video_result_md_template(
         image_path = os.path.join(IMAGE_DIR, f"{image_id}_for_frame_{idx}.jpg")
         with open(image_path, "wb") as f:
             f.write(base64.b64decode(img))
-        image_ids.append(image_id)
-        
+        image_ids.append(f"{image_id}_for_frame_{idx}")
+
     return f"""
 ```video-result
 {{
@@ -762,7 +762,7 @@ def video_result_md_template(
 }}
 ```
 """
-    
+
 def streaming_video_system_result(output: dict) -> Generator[str, None, None]:
     if "sims" in output:
         action_score: dict[str, float] = output["sims"]
@@ -776,30 +776,32 @@ def streaming_video_system_result(output: dict) -> Generator[str, None, None]:
             for action, score in action_score.items():
                 ret_str += f"{action} ({score:.2f}%), "
             yield ret_str[:-2] + ".\n\n"
-            yield f"result: {table_md_template([action_score], 'Action Scores', ['Actions'])}\n\n"
-            
+            yield f"result: {barchart_md_template(list(action_score.values()), list(action_score.keys()), 'Action Scores', 'Scores', 'Actions', 0.1, None, sort=True, sigmoided=True)}\n\n"
+
         else:
             yield f"result: No actions are detected in the video.\n\n"
 
     if "state_tracking" in output:
         state_tracking = output["state_tracking"]
         frames = state_tracking["frames"]
-
+        print("state_tracking", state_tracking)
         object_headers = set()
         object_data = dict()
         rel_data = list()
-        
-        for idx, frame in enumerate(frames):
+
+        for idx_frame, frame in enumerate(frames):
             objects: list[dict[str, str]] = frame["objects"]
             relations: list[dict[str,str]] = frame["relations"]
 
             if objects and len(objects) > 0:
                 headers = [obj["name"] for obj in objects]
                 object_headers.update(headers)
-                for idx, obj in enumerate(objects):
+                for idx_obj, obj in enumerate(objects):
                     if obj["name"] not in object_data:
                         object_data[obj["name"]] = [""] * len(frames)
-                    object_data[obj["name"]].append("\n".join([f"{k}: {v}" for k, v in obj.items() if k != "name"]))
+                    object_data[obj["name"]][idx_frame] = "\n".join(
+                        [f"{k}: {v}" for k, v in obj.items() if k != "name"]
+                    )
 
             if relations and len(relations) > 0:
                 relations  = [" - ".join([rel["subject"], rel["relation"], rel["object"]]) for rel in relations]
