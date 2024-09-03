@@ -886,30 +886,36 @@ class AgentManager:
         )
         return result
 
+
     def heatmap_class_difference(
         self,
         user_id: str,
         concept1_name: str,
         concept2_name: str,
         image: PIL.Image.Image = None,
-    ):
-        logger.info(str(f"heatmap_class_difference: {concept1_name} - {concept2_name}"))
-        logger.info(str(f"heatmap_class_difference: {image}"))
+    ) -> dict:
+        logger.info(f"heatmap_class_difference: {concept1_name} - {concept2_name}")
+        logger.info(f"heatmap_class_difference: {image}")
+
         rst = {}
+        concept1_part_names, concept2_part_names = self.executeControllerFunctionNoSave(
+            user_id, "compare_component_concepts", concept1_name, concept2_name
+        )
+        rst["concept1_part_names"] = concept1_part_names
+        rst["concept2_part_names"] = concept2_part_names
+
         if concept1_name and concept2_name:
-            rst["concept1"]: Concept = self.retrieve_concept(user_id, concept1_name)
-            rst["concept2"]: Concept = self.retrieve_concept(user_id, concept2_name)
-            if (
-                rst["concept1"].component_concepts.__len__() > 0
-                and rst["concept2"].component_concepts.__len__() > 0
-            ):
+            rst["concept1"] = self.retrieve_concept(user_id, concept1_name)
+            rst["concept2"] = self.retrieve_concept(user_id, concept2_name)
+
+            if rst["concept1"].component_concepts and rst["concept2"].component_concepts:
                 return rst
 
-        result =  self.executeControllerFunctionNoSave(
+        result = self.executeControllerFunctionNoSave(
             user_id, "heatmap_class_difference", concept1_name, concept2_name, image
         )
-        result["concept1"] = rst["concept1"]
-        result["concept2"] = rst["concept2"]
+        result.update(rst)
+
         return result
 
     def heatmap(

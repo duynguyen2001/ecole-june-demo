@@ -374,9 +374,8 @@ def streaming_heatmap_class_difference(
         elif concept_1.name == concept_2.name:
             yield f"""result: I predict that the object in the first image and the object in the second image are both a {concept_1.name}.\n\n"""
         elif concept_1.component_concepts.__len__() > 0 or concept_2.component_concepts.__len__() > 0:
-            diff_components_1 = set(concept_1.component_concepts.keys()).difference(set(concept_2.component_concepts.keys()))
-            diff_components_2 = set(concept_2.component_concepts.keys()).difference(set(concept_1.component_concepts.keys()))
-
+            diff_components_1 = output["concept1_part_names"]
+            diff_components_2 = output["concept2_part_names"]
             if diff_components_1.__len__() > 0 and diff_components_2.__len__() > 0:
                 yield f"""result: The two concepts have different parts. The parts that are unique to the "{concept_1.name}" are: """
                 yield image_block([PIL.Image.open(concept_1.component_concepts[component].examples[0].image_path).convert('RGB') for component in diff_components_1], names=[component for component in diff_components_1], hyperlink=True)
@@ -407,8 +406,9 @@ def streaming_heatmap_class_difference(
                     names=[component for component in diff_components_1],
                     hyperlink=True,
                 )
-                yield f"""result: In contrast, regions that are indicative of "{concept_2.name}" are highlighted below: \n\n"""
-                yield image_block([output["concept2_minus_concept1_on_concept2_image"]], names=[concept_2.name])
+                if "concept2_minus_concept1_on_concept2_image" in output:
+                    yield f"""result: In contrast, regions that are indicative of "{concept_2.name}" are highlighted below: \n\n"""
+                    yield image_block([output["concept2_minus_concept1_on_concept2_image"]], names=[concept_2.name])
 
             elif diff_components_2.__len__() > 0:
                 yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
@@ -424,8 +424,9 @@ def streaming_heatmap_class_difference(
                     names=[component for component in diff_components_2],
                     hyperlink=True,
                 )
-                yield f"""result: In contrast, regions that are indicative of "{concept_1.name}" are highlighted below: \n\n"""
-                yield image_block([output["concept1_minus_concept2_on_concept1_image"]], names=[concept_1.name])
+                if "concept1_minus_concept2_on_concept1_image" in output:
+                    yield f"""result: In contrast, regions that are indicative of "{concept_1.name}" are highlighted below: \n\n"""
+                    yield image_block([output["concept1_minus_concept2_on_concept1_image"]], names=[concept_1.name])
             else:
                 yield f"""result: The two concepts have the same parts. \n\n"""
         else:
