@@ -1191,7 +1191,7 @@ async def interference(
 
     return JSONResponse(content=response.json())
 
-@app.post("/video-inference-by-id/{video_id}", tags=["video"])
+@app.post("/video-inference-by-id", tags=["video"])
 async def inference(video_id: str, text_input: str = "climbing, crawling, grasping, hiding, jumping, picking up, pulling, pushing, putting down, rolling, running, sliding, walking, explode, launch"):
     video_path = os.path.join(VIDEO_DIR, f"{video_id}.mp4")
     if not os.path.exists(video_path):

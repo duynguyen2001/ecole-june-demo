@@ -408,5 +408,22 @@
                 "args": {}
             }
         ]
+    },
+    {
+        "title": "What is the action inside the video?",
+        "type": "question",
+        "video_required": true,
+        "image_required": false,
+        "params": [],
+        "functions": [
+            {
+                "name": "video-inference-by-id",
+                "description": "Predicting the most likely action from the video...",
+                "args": {
+                    "id": "video_id"
+                }
+            }
+        ]
+
     }
 ]

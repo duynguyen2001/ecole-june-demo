@@ -37,6 +37,26 @@ def clean_string(input_string: str) -> str:
     return cleaned_string
 
 
+def find_and_remove_code_blocks(text):
+    # Regex pattern to detect triple backticks followed by a type name
+    pattern = re.compile(r"```(\w+)\s+(.*?)```", re.DOTALL)
+
+    # Find all matches
+    matches = pattern.findall(text)
+
+    # Store the type and content of each block
+    code_blocks = []
+    for match in matches:
+        code_type = match[0]  # The type name (e.g., json, python)
+        content = match[1]  # The content inside the block
+        code_blocks.append((code_type, content.strip()))
+
+    # Remove the code blocks from the original text
+    cleaned_text = pattern.sub("", text)
+
+    return code_blocks, cleaned_text
+
+
 def streaming_response_yield(output_string, counter: Counter):
     counter.increment()
     return (
@@ -140,7 +160,10 @@ def strip_tokens(
         # Remove images from sentence
         prompt = re.sub(r"!\[.*\]\(.*\)", "", sentence)
 
-        split_by_role.append({"role": role, "prompt": prompt, "images": images})
+        # get code blocks if any
+        code_blocks, prompt = find_and_remove_code_blocks(prompt)
+
+        split_by_role.append({"role": role, "prompt": prompt, "images": images, "code_blocks": code_blocks})
 
     # remove empty strings
     return split_by_role
@@ -218,7 +241,8 @@ def match_template(generator: Any, sentence: str, threshold: float = 0.3) -> dic
             "template_title": matched_template["title"],
             "params": params,
             "functions": matched_template["functions"],
-            "image_required": matched_template["image_required"],
+            "image_required": matched_template.get("image_required", False),
+            "video_required": matched_template.get("video_required", False),
         }
 
     return {
@@ -226,6 +250,7 @@ def match_template(generator: Any, sentence: str, threshold: float = 0.3) -> dic
         "params": None,
         "functions": None,
         "image_required": False,
+        "video_required": False,
     }
 
 

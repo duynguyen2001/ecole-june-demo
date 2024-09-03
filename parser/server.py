@@ -116,7 +116,7 @@ async def generate_text(request: Request) -> None:
         # Call the APIs to generate the text
         if template_title is not None:
             async for response in make_requests(
-                functions, params, last_input["images"], userId, callback = update_last_stream, counter = counter
+                functions, params, last_input["images"], last_input["code_blocks"], userId, callback = update_last_stream, counter = counter
             ):
                 yield response
         # yield the final response string, this will be the final response, only happens when all the APIs have been called successfully

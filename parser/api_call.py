@@ -1,4 +1,6 @@
 import asyncio
+import code
+import json
 import logging
 import os
 import time
@@ -66,7 +68,7 @@ async def _make_request(function_name: str, args: dict[str, str], files: object,
             except httpx.HTTPStatusError as e:
                 yield streaming_response_end(f"HTTP Error: {e}", counter)
 
-async def make_requests(functions, params, images, user_id = "default_user", callback = None, counter: Counter = Counter()) -> AsyncGenerator[str, None]:
+async def make_requests(functions, params, images, code_blocks, user_id = "default_user", callback = None, counter: Counter = Counter()) -> AsyncGenerator[str, None]:
     """
     Make a request to the image backend API.
 
@@ -78,10 +80,17 @@ async def make_requests(functions, params, images, user_id = "default_user", cal
     dict: The response from the image backend API.
     """
     i = 0
+    if code_blocks and  isinstance(code_blocks, list):
+        for code_block_pair in code_blocks:
+            if code_block_pair[0] == "video":
+                json_obj = json.loads(code_block_pair[1])
+                print("json_obj", json_obj)
+                params["id"] = json_obj["id"]
+                    
     for function in functions:
         function_name = function["name"]
         args = function["args"]
-        extra_args = function.get("extra_args", {})
+        extra_args = function.get("extra_args", {})            
 
         # Make a request to the image backend API
         arg_dict = {}
@@ -111,7 +120,7 @@ async def make_requests(functions, params, images, user_id = "default_user", cal
             yield streaming_response_yield(
                 substitute_brackets(description, params) + "\n\n", counter
             )
-        
+
         async for msg in _make_request(function_name, arg_dict, image_upload_list, user_id, extra_args, callback, counter= counter):
             yield msg
     yield streaming_response_yield("success\n\n", counter)
