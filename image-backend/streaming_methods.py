@@ -321,7 +321,7 @@ async def streaming_hierachical_predict_result(
                 yield node
 
 
-def image_block(images: PIL.Image.Image, names: list[str] = [], hyperlink: bool = False):
+def image_block(images: list[PIL.Image.Image], names: list[str] = [], hyperlink: bool = False):
     """
     Implements:
         images: Show the images.
@@ -377,53 +377,76 @@ def streaming_heatmap_class_difference(
             diff_components_1 = output["concept1_part_names"]
             diff_components_2 = output["concept2_part_names"]
             if diff_components_1.__len__() > 0 and diff_components_2.__len__() > 0:
-                yield f"""result: The two concepts have different parts. The parts that are unique to the "{concept_1.name}" are: """
-                yield image_block([PIL.Image.open(concept_1.component_concepts[component].examples[0].image_path).convert('RGB') for component in diff_components_1], names=[component for component in diff_components_1], hyperlink=True)
-                yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
-                yield image_block(
-                    [
-                        PIL.Image.open(
-                            concept_2.component_concepts[component]
-                            .examples[0]
-                            .image_path
-                        ).convert("RGB")
-                        for component in diff_components_2
-                    ],
-                    names=[component for component in diff_components_2],
-                    hyperlink=True,
-                )
-            elif diff_components_1.__len__() > 0:
-                yield f"""result: The parts that are unique to the "{concept_1.name}" are: """
-                yield image_block(
-                    [
-                        PIL.Image.open(
+                dict_images : dict[str, PIL.Image.Image]= {}
+                for component in diff_components_1:
+                    if len(concept_1.component_concepts[component]
+                            .examples) > 0:
+                        dict_images[component] = PIL.Image.open(
                             concept_1.component_concepts[component]
                             .examples[0]
                             .image_path
                         ).convert("RGB")
-                        for component in diff_components_1
-                    ],
-                    names=[component for component in diff_components_1],
-                    hyperlink=True,
-                )
+                if len(dict_images) > 0:
+                    yield f"""result: The parts that are unique to the "{concept_1.name}" are: """
+                    yield image_block(
+                        list(dict_images.values()),
+                        names=list(dict_images.keys()),
+                        hyperlink=True,
+                    )
+                dict_images = {}
+                for component in diff_components_2:
+                    if len(concept_2.component_concepts[component]
+                            .examples) > 0:
+                        dict_images[component] = PIL.Image.open(
+                            concept_2.component_concepts[component]
+                            .examples[0]
+                            .image_path
+                        ).convert("RGB")
+                if len(dict_images) > 0:
+                    yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
+                    yield image_block(
+                        list(dict_images.values()),
+                        names=list(dict_images.keys()),
+                        hyperlink=True,
+                    )
+            elif diff_components_1.__len__() > 0:
+                dict_images : dict[str, PIL.Image.Image]= {}
+                for component in diff_components_1:
+                    if len(concept_1.component_concepts[component]
+                            .examples) > 0:
+                        dict_images[component] = PIL.Image.open(
+                            concept_1.component_concepts[component]
+                            .examples[0]
+                            .image_path
+                        ).convert("RGB")
+                if len(dict_images) > 0:
+                    yield f"""result: The parts that are unique to the "{concept_1.name}" are: """
+                    yield image_block(
+                        list(dict_images.values()),
+                        names=list(dict_images.keys()),
+                        hyperlink=True,
+                    )
                 if "concept2_minus_concept1_on_concept2_image" in output:
                     yield f"""result: In contrast, regions that are indicative of "{concept_2.name}" are highlighted below: \n\n"""
                     yield image_block([output["concept2_minus_concept1_on_concept2_image"]], names=[concept_2.name])
 
             elif diff_components_2.__len__() > 0:
-                yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
-                yield image_block(
-                    [
-                        PIL.Image.open(
+                dict_images : dict[str, PIL.Image.Image]= {}
+                for component in diff_components_2:
+                    if len(concept_2.component_concepts[component]
+                            .examples) > 0:
+                        dict_images[component] = PIL.Image.open(
                             concept_2.component_concepts[component]
                             .examples[0]
                             .image_path
                         ).convert("RGB")
-                        for component in diff_components_2
-                    ],
-                    names=[component for component in diff_components_2],
-                    hyperlink=True,
-                )
+                if len(dict_images) > 0:
+                    yield f"""result: The parts that are unique to the "{concept_2.name}" are: """
+                    yield image_block(
+                        list(dict_images.values()),
+                        names=list(dict_images.keys()),
+                        hyperlink=True,
+                    )
                 if "concept1_minus_concept2_on_concept1_image" in output:
                     yield f"""result: In contrast, regions that are indicative of "{concept_1.name}" are highlighted below: \n\n"""
                     yield image_block([output["concept1_minus_concept2_on_concept1_image"]], names=[concept_1.name])
