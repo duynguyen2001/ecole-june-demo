@@ -1,4 +1,7 @@
 import asyncio
+import os
+
+os.environ["HF_HOME"] = "/shared/nas2/knguye71/huggingface"
 
 from api_call import make_requests
 from dotenv import load_dotenv
