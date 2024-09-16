@@ -188,66 +188,175 @@ def format_prediction_result(
     predicted_concept_components_heatmaps = output.predicted_concept_components_heatmaps
     component_concept_heatmaps = None
     if predicted_concept_components_heatmaps:
-        tup_list = list(predicted_concept_components_heatmaps.values())
-        component_concept_heatmaps = [tup[0] for tup in tup_list]
-        score_list = [tup[1] for tup in tup_list]
+        component_concept_heatmaps = list(
+            predicted_concept_components_heatmaps.values()
+        )
 
-    if component_concept_heatmaps and len(component_concept_heatmaps) > 0:
-        if score_list:
-            names = list(component_concept_names)
-            indexes_equals_1 = [i for i, score in enumerate(score_list) if score == 1]
-            indexes_equals_0_5 = [
-                i for i, score in enumerate(score_list) if score == 0.5
-            ]
-            return_string = ""
-
-            return_string += f"This is a(n) {predicted_label} because "
-            if indexes_equals_1 and len(indexes_equals_1) > 0:
-                return_string += (
-                    f"it has {len(indexes_equals_1)} parts that are indicative of a(n) '{predicted_label}': "
-                )
-                nodes.append(correct_grammar(return_string))
-                nodes.append(
-                    image_block(
-                        [component_concept_heatmaps[i] for i in indexes_equals_1],
-                        [names[index] for index in indexes_equals_1],
-                        hyperlink=True,
-                    )
-                )
-
-            if indexes_equals_0_5 and len(indexes_equals_0_5) > 0:
-                if len(indexes_equals_1) > 0:
-                    nodes.append(
-                        correct_grammar(
-                            f"Also, it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': "
-                        )
-                    )
-                else:
-                    return_string += (
-                        f"it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': " 
-                    )
-                    nodes.append(correct_grammar(return_string))
-
-                nodes.append(
-                    image_block(
-                        [component_concept_heatmaps[i] for i in indexes_equals_0_5],
-                        [names[index] for index in indexes_equals_0_5],
-                        hyperlink=True,
-                    )
-                )
-
-    else:
-        if not predicted_label or predicted_label == "unknown":
-            nodes.append("I do not know what object is in the image\n\n")
-        else:
-            nodes.append(
-                correct_grammar(
-                    f'This is a  "{predicted_label}" in the image, because of these highlighted regions: \n\n'
-                )
+    if segmentations := output.segmentations:
+        masks = segmentations.part_masks
+        attr_names = LIST_DINO_ATTR
+        region_general_attributes = []
+        for index in range(len(masks)):
+            region_general_attribute_mask = {
+                attr: mask_scores[index][j] for j, attr in enumerate(attr_names)
+            }
+            region_general_attribute_mask = dict(
+                sorted(
+                    region_general_attribute_mask.items(),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_k]
             )
-            nodes.append(image_block([output.concept_heatmap[0]], names=[predicted_label]))
+            # filter only the score greater than 0.5
+            region_general_attribute_mask = {
+                k: v for k, v in region_general_attribute_mask.items() if v >= 0.6
+            }
 
+            region_general_attributes.append(region_general_attribute_mask)
+
+    if img_trained_attr_scores:
+        img_trained_attr_scores = dict(zip(attr_names, img_trained_attr_scores))
+        img_trained_attr_scores = dict(
+            sorted(img_trained_attr_scores.items(), key=lambda x: x[1], reverse=True)[
+                :top_k
+            ]
+        )
+        # filter only the score greater than 0.5
+        img_trained_attr_scores = {
+            k: v for k, v in img_trained_attr_scores.items() if v >= 0.6
+        }
+
+    nodes.append(
+        image_with_mask_md_template(
+            segmentations["input_image"],
+            masks,
+            general_attributes=region_general_attributes,
+            general_attributes_image=img_trained_attr_scores,
+        )
+        if segmentations
+        and segmentations["input_image"]
+        and region_general_attributes
+        and len(masks)
+        and img_trained_attr_scores
+        else ""
+    )
+    nodes.append(
+        correct_grammar(f'There is a  "{predicted_label}" in the image\n\n')
+        if predicted_label and predicted_label != "unknown"
+        else "I do not know what object is in the image\n\n"
+    )
+    nodes.append("### Concept Scores")
+    nodes.append(
+        barchart_md_template(
+            output["predictors_scores"].tolist(),
+            output["concept_names"],
+            "Concept Scores",
+            "Scores",
+            "Concepts",
+            0.1,
+            rev_list,
+            sort=True,
+            sigmoided=True,
+        )
+    )
+    nodes.append("### Named Parts")
+    if component_concept_heatmaps:
+        # nodes.append(barchart_md_template(component_concept_scores, component_concept_names, 'Component Concepts Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True) )
+        nodes.append(
+            image_block(component_concept_heatmaps, list(component_concept_names))
+        )
+    else:
+        nodes.append("No named parts found")
     return nodes
+
+
+# def format_prediction_result(
+#     output: PredictOutput, rev_dict: dict | None = None, top_k: int = 5
+# ):
+#     nodes = []
+#     rev_list = [rev_dict[name] for name in output["concept_names"]] if rev_dict else []
+#     predicted_label = output.predicted_label
+#     if predicted_label == "unknown":
+#         return "I do not know what object is in the image\n\n"
+
+#     predicted_concept_outputs = output.predicted_concept_outputs
+#     if predicted_concept_outputs and predicted_label != "unknown":
+#         mask_scores = predicted_concept_outputs.trained_attr_region_scores.tolist()
+#         img_trained_attr_scores = (
+#             predicted_concept_outputs.trained_attr_img_scores.tolist()
+#         )
+
+#     predicted_concept_components_to_scores = (
+#         output.predicted_concept_components_to_scores
+#     )
+#     component_concept_scores = None
+#     component_concept_names = None
+#     if predicted_concept_components_to_scores:
+#         component_concept_scores = predicted_concept_components_to_scores.values()
+#         component_concept_names = predicted_concept_components_to_scores.keys()
+#     predicted_concept_components_heatmaps = output.predicted_concept_components_heatmaps
+#     component_concept_heatmaps = None
+#     if predicted_concept_components_heatmaps:
+#         tup_list = list(predicted_concept_components_heatmaps.values())
+#         component_concept_heatmaps = [tup[0] for tup in tup_list]
+#         score_list = [tup[1] for tup in tup_list]
+
+#     if component_concept_heatmaps and len(component_concept_heatmaps) > 0:
+#         if score_list:
+#             names = list(component_concept_names)
+#             indexes_equals_1 = [i for i, score in enumerate(score_list) if score == 1]
+#             indexes_equals_0_5 = [
+#                 i for i, score in enumerate(score_list) if score == 0.5
+#             ]
+#             return_string = ""
+
+#             return_string += f"This is a(n) {predicted_label} because "
+#             if indexes_equals_1 and len(indexes_equals_1) > 0:
+#                 return_string += (
+#                     f"it has {len(indexes_equals_1)} parts that are indicative of a(n) '{predicted_label}': "
+#                 )
+#                 nodes.append(correct_grammar(return_string))
+#                 nodes.append(
+#                     image_block(
+#                         [component_concept_heatmaps[i] for i in indexes_equals_1],
+#                         [names[index] for index in indexes_equals_1],
+#                         hyperlink=True,
+#                     )
+#                 )
+
+#             if indexes_equals_0_5 and len(indexes_equals_0_5) > 0:
+#                 if len(indexes_equals_1) > 0:
+#                     nodes.append(
+#                         correct_grammar(
+#                             f"Also, it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': "
+#                         )
+#                     )
+#                 else:
+#                     return_string += (
+#                         f"it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': "
+#                     )
+#                     nodes.append(correct_grammar(return_string))
+
+#                 nodes.append(
+#                     image_block(
+#                         [component_concept_heatmaps[i] for i in indexes_equals_0_5],
+#                         [names[index] for index in indexes_equals_0_5],
+#                         hyperlink=True,
+#                     )
+#                 )
+
+#     else:
+#         if not predicted_label or predicted_label == "unknown":
+#             nodes.append("I do not know what object is in the image\n\n")
+#         else:
+#             nodes.append(
+#                 correct_grammar(
+#                     f'This is a  "{predicted_label}" in the image, because of these highlighted regions: \n\n'
+#                 )
+#             )
+#             nodes.append(image_block([output.concept_heatmap[0]], names=[predicted_label]))
+
+#     return nodes
 
 
 async def streaming_hierachical_predict_result(
