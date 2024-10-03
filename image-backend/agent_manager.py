@@ -23,7 +23,7 @@ LOC_SEG_CONCEPT_DIR = os.environ.get(
     "LOC_SEG_CONCEPT_DIR", "/shared/nas2/knguye71/ecole-june-demo/cache/log_and_seg"
 )
 CACHE_DIR = os.environ.get(
-    "CACHE_DIR", "/shared/nas2/knguye71/ecole-june-demo/cache/ckpt_dir"
+    "CACHE_DIR", "/shared/nas2/knguye71/ecole-june-demo/cache"
 )
 IMAGE_DIR = os.environ.get(
     "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
@@ -766,7 +766,7 @@ class AgentManager:
     def _loc_and_seg_single_image(self, image: PIL.Image.Image, concept_name: str):
         try:
             time_start = time.time()
-            cache_dir = CACHE_DIR
+            cache_dir = os.path.join(CACHE_DIR, "ckpt_dir")
             save_log_and_seg_concept_dir = LOC_SEG_CONCEPT_DIR
             agent_key = self.get_next_agent_key()
             loc_seg_output = self.agents[agent_key].call(
@@ -886,7 +886,6 @@ class AgentManager:
             user_id, "heatmap_image_comparison", image1, image2
         )
         return result
-
 
     def heatmap_class_difference(
         self,
