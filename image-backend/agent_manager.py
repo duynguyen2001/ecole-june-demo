@@ -11,10 +11,11 @@ from typing import Any, List
 
 import PIL.Image
 import torch
-from ExtendedClasses import (DEFAULT_CKPT, Concept, ConceptExample,
-                             ConceptKBFeaturePipeline,
+from ExtendedClasses import (DEFAULT_CKPT, ConceptExample,
                              ExtendedCLIPConceptRetriever, ExtendedController)
 from PIL import Image
+
+from ecole_mo9_demo.kb_ops.feature_pipeline import ConceptKBFeaturePipeline
 
 logger = logging.getLogger("uvicorn.error")
 

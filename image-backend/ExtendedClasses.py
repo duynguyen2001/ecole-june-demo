@@ -1,35 +1,24 @@
 # %%
-import sys
-from unittest.mock import DEFAULT
-
-import torch.multiprocessing as mp
-
-sys.path.append("/shared/nas2/knguye71/ecole-june-demo/ecole_mo9_demo/src")
-import copy
-import cProfile
 import gc
 import logging
 import os
-import sys
 # import base64
 import time
-import traceback
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Optional
 
-# from feature_extraction.trained_attrs import N_ATTRS_SUBSET
 import PIL.Image
 import torch
-from controller import Controller
-from controller.train.train_parallel import ConcurrentTrainingConceptSelector
-from kb_ops import ConceptKBTrainer
-from kb_ops.caching.cacher import ConceptKBFeatureCacher
-from kb_ops.concurrency.locking.lock_generators import LockType
-from kb_ops.dataset import FeatureDataset, extend_with_global_negatives
-from kb_ops.feature_pipeline import ConceptKBFeaturePipeline
-from kb_ops.retrieve import CLIPConceptRetriever
-from model.concept import Concept, ConceptExample, ConceptKB
+import torch.multiprocessing as mp
 from PIL import Image
+
+import ecole_mo9_demo
+from ecole_mo9_demo.controller import Controller
+from ecole_mo9_demo.feature_extraction.trained_attrs import N_ATTRS_SUBSET
+from ecole_mo9_demo.kb_ops import ConceptKBTrainer
+from ecole_mo9_demo.kb_ops.caching.cacher import ConceptKBFeatureCacher
+from ecole_mo9_demo.kb_ops.concurrency.locking.lock_generators import LockType
+from ecole_mo9_demo.kb_ops.retrieve import CLIPConceptRetriever
+from ecole_mo9_demo.model.concept import Concept, ConceptExample, ConceptKB
 
 torch.autograd.set_detect_anomaly(True)
 # if mp.get_start_method(allow_none=True) != "spawn":
