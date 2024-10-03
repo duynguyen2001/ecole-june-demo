@@ -223,7 +223,7 @@ def format_prediction_result(
         )
         # filter only the score greater than 0.5
         img_trained_attr_scores = {
-            k: v for k, v in img_trained_attr_scores.items() if v >= 0.6
+            k: v for k, v in img_trained_attr_scores.items() if v >= 0.0
         }
 
     nodes.append(
@@ -263,7 +263,7 @@ def format_prediction_result(
     if component_concept_heatmaps:
         # nodes.append(barchart_md_template(component_concept_scores, component_concept_names, 'Component Concepts Scores', 'Scores', 'Concepts', 0.1, None, sort=True, sigmoided=True) )
         nodes.append(
-            image_block(component_concept_heatmaps, list(component_concept_names))
+            image_block([image_tuple[0] for image_tuple in component_concept_heatmaps], list(component_concept_names))
         )
     else:
         nodes.append("No named parts found")
