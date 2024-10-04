@@ -11,7 +11,6 @@ import torch
 import torch.multiprocessing as mp
 from PIL import Image
 
-import ecole_mo9_demo
 from ecole_mo9_demo.controller import Controller
 from ecole_mo9_demo.feature_extraction.trained_attrs import N_ATTRS_SUBSET
 from ecole_mo9_demo.kb_ops import ConceptKBTrainer

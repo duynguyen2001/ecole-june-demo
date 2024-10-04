@@ -9,12 +9,13 @@ import numpy as np
 import PIL
 import PIL.Image
 import torch
-from kb_ops.predict import PredictOutput
-from model import concept
-from model.concept.concept import Concept
-from model.concept.concept_kb import ConceptKB
 from server_utils import (convert_bool_tensor_to_byte_string,
                           convert_PIL_Image_to_base64_string)
+
+from ecole_mo9_demo.kb_ops.predict import PredictOutput
+from ecole_mo9_demo.model import concept
+from ecole_mo9_demo.model.concept.concept import Concept
+from ecole_mo9_demo.model.concept.concept_kb import ConceptKB
 
 IMAGE_DIR = os.environ.get(
     "IMAGE_DIR", "/shared/nas2/knguye71/ecole-june-demo/image_dir"
@@ -29,7 +30,10 @@ logger = logging.getLogger("uvicorn.error")
 
 import json
 
-DINO_SUBSET = "/shared/nas2/knguye71/ecole-june-demo/ecole_mo9_demo/src/feature_extraction/trained_attrs/dino_class_id_to_index.json"
+from ecole_mo9_demo.feature_extraction.trained_attrs import dino_index_path
+
+DINO_SUBSET = dino_index_path
+
 with open(DINO_SUBSET) as f:
     DINO_INDEX_TO_ATTR = json.load(f)
 LIST_DINO_ATTR = list(DINO_INDEX_TO_ATTR.values())
