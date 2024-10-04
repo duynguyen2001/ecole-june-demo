@@ -1,0 +1,31 @@
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: ./dockers/Dockerfile.imagebackend
+    image: ecolemiracledemo/ecole_mo9_demo:1.4
+    env_file:
+      - ./.env
+    volumes:
+      - ${MOUNT_HF_HOME}:${HF_HOME}
+      - ${MOUNT_FEATURE_CACHE_DIR}:${FEATURE_CACHE_DIR}
+      - ${MOUNT_LOC_SEG_CONCEPT_DIR}:${LOC_SEG_CONCEPT_DIR}
+      - ${MOUNT_CACHE_DIR}:${CACHE_DIR}
+      - ${MOUNT_JSON_DIR}:${JSON_DIR}
+      - ${MOUNT_IMAGE_DIR}:${IMAGE_DIR}
+      - ${MOUNT_TENSOR_DIR}:${TENSOR_DIR}
+      - ${MOUNT_VIDEO_DIR}:${VIDEO_DIR}
+      - ${MOUNT_INITIAL_DATA_DIR}:${INITIAL_DATA_DIR}
+      - ${MOUNT_DEFAULT_SAM_CKPT_DIR}:${DEFAULT_SAM_CKPT_DIR}
+    ports:
+      - "16005:8000"
+    # command: source activate myenv && uvicorn image_backend.main:app --host 0.0.0.0 --port 8000
+    # command: /bin/bash 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["5", "6"]
+              capabilities: [gpu]

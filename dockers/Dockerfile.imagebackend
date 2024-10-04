@@ -1,0 +1,56 @@
+# Use an official Conda image as a parent image
+FROM continuumio/miniconda3
+
+# Set the shell to bash
+SHELL ["/bin/bash", "-c"]
+# Set the working directory in the container
+WORKDIR /app
+
+
+
+# Update conda and create a new environment with Python 3.12
+RUN conda update -n base -c defaults conda && \
+    conda create -n myenv python=3.12  pytorch torchvision torchaudio pytorch-cuda=12.4 faiss-gpu=1.8.0 -c pytorch -c nvidia -y && \
+    echo "source activate myenv" > ~/.bashrc
+
+
+RUN conda init 
+
+RUN source activate myenv && \
+    conda install -c conda-forge pycocotools -y
+
+
+COPY ecole_mo9_demo /app/ecole_mo9_demo
+COPY image-backend /app/image-backend
+
+# Install Python dependencies from requirements.txt
+RUN source activate myenv && \
+    cd /app/image-backend && \
+    pip install -r /app/image-backend/requirements.txt 
+
+
+
+# Set environment variables for the Docker container
+ENV HF_HOME=/app/huggingface
+ENV CUDA_VISIBLE_DEVICES=1
+ENV DEFAULT_CKPT="/app/initial_data/concept_kb_epoch_496_docker.pt"
+ENV FEATURE_CACHE_DIR="/app/cache/feature/"
+ENV LOC_SEG_CONCEPT_DIR="/app/cache/log_and_seg"
+ENV CACHE_DIR="/app/cache"
+ENV JSON_DIR="/app/json_dir"
+ENV IMAGE_DIR="/app/image_dir"
+ENV TENSOR_DIR="/app/tensor_dir"
+ENV VIDEO_DIR="/app/video_dir"
+ENV DEFAULT_SAM_CKPT_DIR="/app/initial_data/checkpoints"
+
+
+# Initialize conda and activate the environment
+RUN conda init bash && \
+    echo "conda activate myenv" >> ~/.bashrc && \
+    echo "conda activate myenv" >> ~/.profile
+
+# Set the default command to run when starting the container
+CMD ["/bin/bash", "-c", "source ~/.bashrc && cd ./image-backend && exec uvicorn server:app --host 0.0.0.0 --port 8000"]
+
+# Expose port 8000
+EXPOSE 8000
