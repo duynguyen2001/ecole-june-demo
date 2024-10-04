@@ -4,26 +4,23 @@ services:
     build:
       context: ..
       dockerfile: ./dockers/Dockerfile.imagebackend
-    image: ecolemiracledemo/ecole_mo9_demo:1.6
+    image: ecolemiracledemo/ecole_mo9_demo:1.0.1
     env_file:
       - ./.env
     volumes:
-      - ${MOUNT_HF_HOME}:${HF_HOME}:Z
-      - ${MOUNT_FEATURE_CACHE_DIR}:${FEATURE_CACHE_DIR}:Z
-      - ${MOUNT_LOC_SEG_CONCEPT_DIR}:${LOC_SEG_CONCEPT_DIR}:Z
-      - ${MOUNT_CACHE_DIR}:${CACHE_DIR}:Z
-      - ${MOUNT_JSON_DIR}:${JSON_DIR}:Z
-      - ${MOUNT_IMAGE_DIR}:${IMAGE_DIR}:Z
-      - ${MOUNT_TENSOR_DIR}:${TENSOR_DIR}:Z
-      - ${MOUNT_VIDEO_DIR}:${VIDEO_DIR}:Z
-      - ${MOUNT_INITIAL_DATA_DIR}:${INITIAL_DATA_DIR}:Z
-      - ${MOUNT_DEFAULT_SAM_CKPT_DIR}:${DEFAULT_SAM_CKPT_DIR}:Z
+      - ${MOUNT_JSON_DIR}:${JSON_DIR}:rw,Z
+      - ${MOUNT_IMAGE_DIR}:${IMAGE_DIR}:rw,Z
+      - ${MOUNT_TENSOR_DIR}:${TENSOR_DIR}:rw,Z
+      - ${MOUNT_INITIAL_DATA_DIR}:${INITIAL_DATA_DIR}:rw,Z
+      - ${MOUNT_DEFAULT_SAM_CKPT_DIR}:${DEFAULT_SAM_CKPT_DIR}:rw,Z
+      - ${MOUNT_HF_HOME}:${HF_HOME}:rw,Z
+      - ${MOUNT_CACHE_DIR}:${CACHE_DIR}:rw,Z
     ports:
-      - "16005:8000"
+      - "16004:8000"
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["5", "6"]
+              device_ids: ["6"]
               capabilities: [gpu]

@@ -31,17 +31,16 @@ RUN source activate myenv && \
 
 
 # Set environment variables for the Docker container
-ENV HF_HOME=/app/huggingface
-ENV CUDA_VISIBLE_DEVICES=1
-ENV DEFAULT_CKPT="/app/initial_data/concept_kb_epoch_496_docker.pt"
-ENV FEATURE_CACHE_DIR="/app/cache/feature/"
-ENV LOC_SEG_CONCEPT_DIR="/app/cache/log_and_seg"
-ENV CACHE_DIR="/app/cache"
-ENV JSON_DIR="/app/json_dir"
-ENV IMAGE_DIR="/app/image_dir"
-ENV TENSOR_DIR="/app/tensor_dir"
-ENV VIDEO_DIR="/app/video_dir"
-ENV DEFAULT_SAM_CKPT_DIR="/app/initial_data/checkpoints"
+# ENV HF_HOME="/app/huggingface"
+# ENV DEFAULT_CKPT="/app/initial_data/concept_kb_epoch_496_docker.pt"
+# ENV FEATURE_CACHE_DIR="/app/cache/feature/"
+# ENV LOC_SEG_CONCEPT_DIR="/app/cache/log_and_seg"
+# ENV CACHE_DIR="/app/cache"
+# ENV JSON_DIR="/app/json_dir"
+# ENV IMAGE_DIR="/app/image_dir"
+# ENV TENSOR_DIR="/app/tensor_dir"
+# ENV VIDEO_DIR="/app/video_dir"
+# ENV DEFAULT_SAM_CKPT_DIR="/app/initial_data/checkpoints"
 
 
 # Initialize conda and activate the environment
