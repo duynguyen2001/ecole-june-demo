@@ -4,7 +4,7 @@ services:
     build:
       context: ..
       dockerfile: ./dockers/Dockerfile.imagebackend
-    image: ecolemiracledemo/ecole_mo9_demo:1.4
+    image: ecolemiracledemo/ecole_mo9_demo:1.5
     env_file:
       - ./.env
     volumes:
@@ -20,8 +20,6 @@ services:
       - ${MOUNT_DEFAULT_SAM_CKPT_DIR}:${DEFAULT_SAM_CKPT_DIR}
     ports:
       - "16005:8000"
-    # command: source activate myenv && uvicorn image_backend.main:app --host 0.0.0.0 --port 8000
-    # command: /bin/bash 
     deploy:
       resources:
         reservations:
