@@ -1,23 +1,23 @@
 
 services:
-  app:
+  image-backend:
     build:
       context: ..
       dockerfile: ./dockers/Dockerfile.imagebackend
-    image: ecolemiracledemo/ecole_mo9_demo:1.5
+    image: ecolemiracledemo/ecole_mo9_demo:1.6
     env_file:
       - ./.env
     volumes:
-      - ${MOUNT_HF_HOME}:${HF_HOME}
-      - ${MOUNT_FEATURE_CACHE_DIR}:${FEATURE_CACHE_DIR}
-      - ${MOUNT_LOC_SEG_CONCEPT_DIR}:${LOC_SEG_CONCEPT_DIR}
-      - ${MOUNT_CACHE_DIR}:${CACHE_DIR}
-      - ${MOUNT_JSON_DIR}:${JSON_DIR}
-      - ${MOUNT_IMAGE_DIR}:${IMAGE_DIR}
-      - ${MOUNT_TENSOR_DIR}:${TENSOR_DIR}
-      - ${MOUNT_VIDEO_DIR}:${VIDEO_DIR}
-      - ${MOUNT_INITIAL_DATA_DIR}:${INITIAL_DATA_DIR}
-      - ${MOUNT_DEFAULT_SAM_CKPT_DIR}:${DEFAULT_SAM_CKPT_DIR}
+      - ${MOUNT_HF_HOME}:${HF_HOME}:Z
+      - ${MOUNT_FEATURE_CACHE_DIR}:${FEATURE_CACHE_DIR}:Z
+      - ${MOUNT_LOC_SEG_CONCEPT_DIR}:${LOC_SEG_CONCEPT_DIR}:Z
+      - ${MOUNT_CACHE_DIR}:${CACHE_DIR}:Z
+      - ${MOUNT_JSON_DIR}:${JSON_DIR}:Z
+      - ${MOUNT_IMAGE_DIR}:${IMAGE_DIR}:Z
+      - ${MOUNT_TENSOR_DIR}:${TENSOR_DIR}:Z
+      - ${MOUNT_VIDEO_DIR}:${VIDEO_DIR}:Z
+      - ${MOUNT_INITIAL_DATA_DIR}:${INITIAL_DATA_DIR}:Z
+      - ${MOUNT_DEFAULT_SAM_CKPT_DIR}:${DEFAULT_SAM_CKPT_DIR}:Z
     ports:
       - "16005:8000"
     deploy:
