@@ -1,0 +1,39 @@
+# Use an official Conda image as a parent image
+FROM continuumio/miniconda3
+
+# Set the shell to bash
+SHELL ["/bin/bash", "-c"]
+# Set the working directory in the container
+WORKDIR /app
+
+
+
+# Update conda and create a new environment with Python 3.12
+RUN conda update -n base -c defaults conda && \
+    conda create -n myenv python=3.12  pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y && \
+    echo "source activate myenv" > ~/.bashrc
+
+
+RUN conda init 
+
+RUN source activate myenv && \
+    conda install -c conda-forge pycocotools -y
+
+
+COPY parser /app/parser
+
+# Install Python dependencies from requirements.txt
+RUN source activate myenv && \
+    cd /app/parser && \
+    pip install -r /app/parser/requirements.txt 
+
+# Initialize conda and activate the environment
+RUN conda init bash && \
+    echo "conda activate myenv" >> ~/.bashrc && \
+    echo "conda activate myenv" >> ~/.profile
+
+# Set the default command to run when starting the container
+CMD ["/bin/bash", "-c", "source ~/.bashrc && cd ./parser && exec uvicorn server:app --host 0.0.0.0 --port 8000"]
+
+# Expose port 8000
+EXPOSE 8000

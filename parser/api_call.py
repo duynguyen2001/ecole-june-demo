@@ -1,10 +1,8 @@
-import asyncio
-import code
+
 import json
 import logging
 import os
-import time
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator
 
 import httpx
 from model.Counter import Counter
@@ -18,9 +16,9 @@ logger = logging.getLogger("uvicorn.error")
 IMAGE_BACKEND_API = os.environ.get(
     "IMAGE_BACKEND_API", "http://blender13.cs.illinois.edu:16004"
 )
-
-#
-
+VIDEO_BACKEND_API = os.environ.get(
+    "VIDEO_BACKEND_API", "http://blender13.cs.illinois.edu:16005"
+)
 
 async def _make_request(function_name: str, args: dict[str, str], files: object, user_id: str= "default_user", extra_args: dict[str, str] = {}, callback = None, counter = Counter()) -> AsyncGenerator[str, None]:
     """

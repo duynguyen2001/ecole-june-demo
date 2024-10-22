@@ -9,13 +9,14 @@ from typing import Optional
 import PIL.Image
 import torch
 import torch.multiprocessing as mp
-from PIL import Image
+from PIL.Image import Image
 
 from ecole_mo9_demo.controller import Controller
 from ecole_mo9_demo.feature_extraction.trained_attrs import N_ATTRS_SUBSET
 from ecole_mo9_demo.kb_ops import ConceptKBTrainer
 from ecole_mo9_demo.kb_ops.caching.cacher import ConceptKBFeatureCacher
 from ecole_mo9_demo.kb_ops.concurrency.locking.lock_generators import LockType
+from ecole_mo9_demo.kb_ops.predict import PredictOutput
 from ecole_mo9_demo.kb_ops.retrieve import CLIPConceptRetriever
 from ecole_mo9_demo.model.concept import Concept, ConceptExample, ConceptKB
 
@@ -147,7 +148,7 @@ class ExtendedController(Controller):
                 max_retrieval_distance=max_retrieval_distance,
                 concepts_to_train_kwargs=concepts_to_train_kwargs,
                 devices=AGENT_GPU_LIST,
-                lock_type=LockType.FILE_LOCK,
+                # lock_type=LockType.FILE_LOCK,
                 **train_concept_kwargs,
             )
 
