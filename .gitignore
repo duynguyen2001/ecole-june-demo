@@ -20,3 +20,5 @@ image-backend/feature_cache/*
 lock_dir/*
 json_dir/*
 video_dir/*
+initial_data/*
+*/build/**
