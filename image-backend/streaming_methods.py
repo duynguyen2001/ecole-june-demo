@@ -235,6 +235,38 @@ def format_prediction_result(
                         hyperlink=True,
                     )
                 )
+                
+        predicted_concept_outputs = output.predicted_concept_outputs
+        if predicted_concept_outputs and predicted_label != "unknown":
+            mask_scores = predicted_concept_outputs.trained_attr_region_scores.tolist()
+            img_trained_attr_scores = (
+                predicted_concept_outputs.trained_attr_img_scores.tolist()
+            )
+        if img_trained_attr_scores:
+            attr_names = LIST_DINO_ATTR
+            img_trained_attr_scores = dict(zip(attr_names, img_trained_attr_scores))
+            img_trained_attr_scores = dict(
+                sorted(img_trained_attr_scores.items(), key=lambda x: x[1], reverse=True)[
+                    :top_k
+                ]
+            )
+            # filter only the score greater than 0.5
+            img_trained_attr_scores = {
+                k: v for k, v in img_trained_attr_scores.items() if v >= 0.6
+            }
+            nodes.append(
+                barchart_md_template(
+                    list(img_trained_attr_scores.values()),
+                    list(img_trained_attr_scores.keys()),
+                    "Attributes Scores",
+                    "Scores",
+                    "Attributes",
+                    0.6,
+                    rev_list,
+                    sort=True,
+                    sigmoided=True,
+                )
+            )
 
     else:
         if not predicted_label or predicted_label == "unknown":
