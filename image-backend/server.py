@@ -3,7 +3,7 @@
 import os
 import re
 
-tmp_dir = "/scratch/tmp"
+tmp_dir = "~/.tmp"
 os.makedirs(tmp_dir, exist_ok=True)
 os.environ["TMPDIR"] = tmp_dir
 os.environ["TEMP"] = tmp_dir
