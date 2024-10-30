@@ -1,4 +1,5 @@
 import base64
+import heapq
 import math
 import os
 import uuid
@@ -35,8 +36,8 @@ with open(DINO_SUBSET) as f:
 LIST_DINO_ATTR = list(DINO_INDEX_TO_ATTR.values())
 
 
-def sigmoid(x) -> float:
-    return 1 / (1 + math.exp(-x))
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 
 def correct_grammar(sentence: str) -> str:
@@ -245,25 +246,40 @@ def format_prediction_result(
         else "I do not know what object is in the image\n\n"
     )
     nodes.append("### Concept Scores")
-    nodes.append(
-        barchart_md_template(
-            output["predictors_scores"].tolist(),
-            output["concept_names"],
-            "Concept Scores",
-            "Scores",
-            "Concepts",
-            0.1,
-            rev_list,
-            sort=True,
-            sigmoided=True,
-        )
-    )
-    nodes.append("### Named Parts")
+    # nodes.append(
+    #     barchart_md_template(
+    #         output["predictors_scores"].tolist(),
+    #         output["concept_names"],
+    #         "Concept Scores",
+    #         "Scores",
+    #         "Concepts",
+    #         0.1,
+    #         rev_list,
+    #         sort=True,
+    #         sigmoided=True,
+    #     )
+    # )
+
+    # Pair concept names with sigmoid scores
+    paired_scores = zip(output["concept_names"], sigmoid(output["predictors_scores"]).tolist())
+
+    # Get the top_k pairs with the highest scores
+    top_scores = heapq.nlargest(top_k, paired_scores, key=lambda x: x[1])
+
+    # Filter out pairs with scores greater than 0.5
+    score_pairs = [pair for pair in top_scores if pair[1] > 0.5]
+    
+    ret_str = "The object in the image might belongs to the following concepts: "
+    ret_str += ", ".join([f"{name} ({score:.2f}%)" for name, score in score_pairs])
+
+    nodes.append(correct_grammar(ret_str))
+
     if predicted_concept_components_heatmaps:
         tup_list = list(predicted_concept_components_heatmaps.values())
         component_concept_heatmaps = [tup[0] for tup in tup_list]
         score_list = [tup[1] for tup in tup_list]
     if component_concept_heatmaps and len(component_concept_heatmaps) > 0:
+        nodes.append("### Named Parts")
         if score_list:
             names = list(component_concept_names)
             indexes_equals_1 = [i for i, score in enumerate(score_list) if score == 1]
@@ -310,128 +326,6 @@ def format_prediction_result(
     else:
         nodes.append("No named parts found")
     return nodes
-# def format_prediction_result(
-#     output: PredictOutput, rev_dict: dict | None = None, top_k: int = 5
-# ):
-#     nodes = []
-#     rev_list = [rev_dict[name] for name in output["concept_names"]] if rev_dict else []
-#     predicted_label = output.predicted_label
-#     if predicted_label == "unknown":
-#         return "I do not know what object is in the image\n\n"
-
-#     predicted_concept_outputs = output.predicted_concept_outputs
-#     if predicted_concept_outputs and predicted_label != "unknown":
-#         mask_scores = predicted_concept_outputs.trained_attr_region_scores.tolist()
-#         img_trained_attr_scores = (
-#             predicted_concept_outputs.trained_attr_img_scores.tolist()
-#         )
-
-#     predicted_concept_components_to_scores = (
-#         output.predicted_concept_components_to_scores
-#     )
-#     component_concept_scores = None
-#     component_concept_names = None
-
-#     if predicted_concept_components_to_scores:
-#         component_concept_scores = predicted_concept_components_to_scores.values()
-#         component_concept_names = predicted_concept_components_to_scores.keys()
-#     predicted_concept_components_heatmaps = output.predicted_concept_components_heatmaps
-#     component_concept_heatmaps = None
-#     if predicted_concept_components_heatmaps:
-#         tup_list = list(predicted_concept_components_heatmaps.values())
-#         component_concept_heatmaps = [tup[0] for tup in tup_list]
-#         score_list = [tup[1] for tup in tup_list]
-
-#     if component_concept_heatmaps and len(component_concept_heatmaps) > 0:
-#         if score_list:
-#             names = list(component_concept_names)
-#             indexes_equals_1 = [i for i, score in enumerate(score_list) if score == 1]
-#             indexes_equals_0_5 = [
-#                 i for i, score in enumerate(score_list) if score == 0.5
-#             ]
-#             return_string = ""
-
-#             return_string += f"This is a(n) {predicted_label} because "
-#             if indexes_equals_1 and len(indexes_equals_1) > 0:
-#                 return_string += (
-#                     f"it has {len(indexes_equals_1)} parts that are indicative of a(n) '{predicted_label}': "
-#                 )
-#                 nodes.append(correct_grammar(return_string))
-#                 nodes.append(
-#                     image_block(
-#                         [component_concept_heatmaps[i] for i in indexes_equals_1],
-#                         [names[index] for index in indexes_equals_1],
-#                         hyperlink=True,
-#                     )
-#                 )
-
-#             if indexes_equals_0_5 and len(indexes_equals_0_5) > 0:
-#                 if len(indexes_equals_1) > 0:
-#                     nodes.append(
-#                         correct_grammar(
-#                             f"Also, it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': "
-#                         )
-#                     )
-#                 else:
-#                     return_string += (
-#                         f"it possibly has {len(indexes_equals_0_5)} part(s) that are indicative of a(n) '{predicted_label}': "
-#                     )
-#                     nodes.append(correct_grammar(return_string))
-
-#                 nodes.append(
-#                     image_block(
-#                         [component_concept_heatmaps[i] for i in indexes_equals_0_5],
-#                         [names[index] for index in indexes_equals_0_5],
-#                         hyperlink=True,
-#                     )
-#                 )
-
-#         predicted_concept_outputs = output.predicted_concept_outputs
-#         if predicted_concept_outputs and predicted_label != "unknown":
-#             mask_scores = predicted_concept_outputs.trained_attr_region_scores.tolist()
-#             img_trained_attr_scores = (
-#                 predicted_concept_outputs.trained_attr_img_scores.tolist()
-#             )
-#         # if img_trained_attr_scores:
-#         #     attr_names = LIST_DINO_ATTR
-#         #     img_trained_attr_scores = dict(zip(attr_names, img_trained_attr_scores))
-#         #     img_trained_attr_scores = dict(
-#         #         sorted(img_trained_attr_scores.items(), key=lambda x: x[1], reverse=True)[
-#         #             :top_k
-#         #         ]
-#         #     )
-#         #     # filter only the score greater than 0.5
-#         #     img_trained_attr_scores = {
-#         #         k: v for k, v in img_trained_attr_scores.items() if v >= 0.6
-#         #     }
-#         #     nodes.append(
-#         #         barchart_md_template(
-#         #             list(img_trained_attr_scores.values()),
-#         #             list(img_trained_attr_scores.keys()),
-#         #             "Attributes Scores",
-#         #             "Scores",
-#         #             "Attributes",
-#         #             0.6,
-#         #             rev_list,
-#         #             sort=True,
-#         #             sigmoided=True,
-#         #         )
-#         #     )
-
-
-# else:
-#     if not predicted_label or predicted_label == "unknown":
-#         nodes.append("I do not know what object is in the image\n\n")
-#     else:
-#         nodes.append(
-#             correct_grammar(
-#                 f'This is a  "{predicted_label}" in the image, because of these highlighted regions: \n\n'
-#             )
-#         )
-#         nodes.append(image_block([output.concept_heatmap[0]], names=[predicted_label]))
-
-# return nodes
-
 
 async def streaming_hierachical_predict_result(
     output: dict,
@@ -456,8 +350,19 @@ async def streaming_hierachical_predict_result(
         if predicted_label == "unknown":
             yield "result: I do not know what object is in the image\n\n"
         else:
+            prediction_path = output.get("prediction_path")
+            pred = prediction_path[-1]
+            sorted_data = [pair for pair in sorted(
+                zip(pred["concept_names"], sigmoid(pred["predictors_scores"]).tolist()),
+                key=lambda x: x[1],
+                reverse=True,
+            )[:5] if pair[1] > 0.5]
+            ret_str = "result: The object in the image is a "
+            if len(sorted_data) > 0:
+                ret_str += ", ".join([f"{name} ({score:.2f}%)" for name, score in sorted_data])
+
             yield correct_grammar(
-                f'result: The object in the image is a "{predicted_label}"\n\n'
+                ret_str
             )
     if show_explanation:
         # stream prediction path
@@ -470,18 +375,19 @@ async def streaming_hierachical_predict_result(
 
             for i, pred in enumerate(prediction_path):
                 sorted_data = sorted(
-                    zip(pred["concept_names"], pred["predictors_scores"].tolist()),
+                    zip(
+                        pred["concept_names"], sigmoid(pred["predictors_scores"]).tolist()
+                    ),
                     key=lambda x: x[1],
                     reverse=True,
                 )
-
-                for concept_name, concept_score in sorted_data:
-                    rev_dict[concept_name] = str(uuid.uuid4())
+                rev_dict = {concept_name: str(uuid.uuid4()) for concept_name, _ in sorted_data}
+                for concept_name, concept_score in sorted_data[:5]:
                     decision_tree.append(
                         {
                             "concept_name": concept_name,
                             "score": (
-                                sigmoid(concept_score) if sigmoided else concept_score
+                                concept_score if sigmoided else concept_score
                             ),
                             "parent": concept_path[i - 1] if i > 0 else "root",
                             "id": rev_dict[concept_name] if i > 0 else "root",

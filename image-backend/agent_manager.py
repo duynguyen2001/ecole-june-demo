@@ -71,369 +71,126 @@ from feature_extraction import build_feature_extractor, build_sam
 from feature_extraction.trained_attrs import N_ATTRS_DINO
 from image_processing import build_localizer_and_segmenter
 from model.concept import (ConceptExample, ConceptKB, ConceptKBConfig,
-                           concept_kb)
+                           concept_kb, concept_predictor)
 from streaming_methods import streaming_concept_kb
 
 
 class Agent:
+    def __init__(self, device) -> None:
+        self.device = device
+        self.models = self.initialize_models(device)
+        
     def initialize_models(self, device: str = "cpu") -> dict[str, Any]:
-        """Initialize and return a dictionary of models."""
         sam = build_sam(device=device)
         loc_and_seg = build_localizer_and_segmenter(sam, None)
         feature_extractor = build_feature_extractor(device=device)
         default_kb = ConceptKB()
-        default_kb.initialize(
-            ConceptKBConfig(
-                n_trained_attrs=N_ATTRS_DINO,
-            )
-        )
+        default_kb.initialize(ConceptKBConfig(n_trained_attrs=N_ATTRS_DINO))
         default_kb.to(device)
 
         feature_pipeline = ConceptKBFeaturePipeline(loc_and_seg, feature_extractor)
         feature_pipeline.loc_and_seg.config.do_segment = False
         feature_pipeline.config.use_zs_attr_scores = False
-        feature_pipeline.config.do_segment= False
-        controller = ExtendedController(default_kb, feature_pipeline)
-        retriever = ExtendedCLIPConceptRetriever(
-            default_kb.concepts, feature_extractor.clip, feature_extractor.processor
-        )
-        logger.info(str("Models initialized"))
 
-        models = {
+        return {
             "sam": sam,
             "loc_and_seg": loc_and_seg,
-            "retriever": retriever,
+            "retriever": ExtendedCLIPConceptRetriever(default_kb.concepts, feature_extractor.clip, feature_extractor.processor),
             "feature_extractor": feature_extractor,
-            "controller": controller,
+            "controller": ExtendedController(default_kb, feature_pipeline) 
         }
-        return models
 
-    def model_process(
-        self, input_queue: Queue, output_queue: Queue, device="cpu"
-    ) -> None:
-
-        models = self.initialize_models(device)
-
-        while True:
-            task_id, status, model_key, func_name, args, kwargs = input_queue.get()
-            try:
-                if func_name == "shutdown":
-                    break
-
-                model = models.get(model_key, None)
-                if model is None:
-                    output_queue.put(
-                        (task_id, "error", f"Error: Model '{model_key}' not found")
-                    )
-                    continue
-
-                if not hasattr(model, func_name):
-                    output_queue.put(
-                        (
-                            task_id,
-                            "error",
-                            f"Error: Model '{model_key}' has no function '{func_name}'",
-                        )
-                    )
-                    continue
-                # Perform the function call on the model
-                result = getattr(model, func_name)(*args, **kwargs)
-                output_queue.put((task_id, "done", result))
-            except Exception as e:
-                # General exception handling for any unexpected errors
-                logger.error(sys.exc_info())
-                logger.error(traceback.format_exc())
-                output_queue.put((task_id, "error", str(e)))
-                raise e
-
-    def __init__(self, device) -> None:
-        self.input_queue = Queue()
-        self.output_queue = Queue()
-        self.process = Process(
-            target=self.model_process,
-            args=(self.input_queue, self.output_queue, device),
-        )
-        self.device = device
-        self.process.start()
-
-    def call(self, model_key, func_name, *args, **kwargs) -> Any:
-        task_id = str(uuid.uuid4())
-        status = "processing"
-
-        self.input_queue.put((task_id, status, model_key, func_name, args, kwargs))
-
-        while True:
-            result = (
-                self.output_queue.get()
-            )  # This will block until a result is available
-            if result[0] == task_id:
-                if result[1] == "done":
-                    return result[2]  # Return the actual result
-                elif result[1] == "error":
-                    logger.error(sys.exc_info())
-                    logger.error(traceback.format_exc())
-                    raise Exception(f"Error processing task {task_id}: {result[2]}")
-                else:
-                    logger.error(sys.exc_info())
-                    logger.error(traceback.format_exc())
-                    raise Exception(
-                        f"Unexpected status for task {task_id}: {result[1]}"
-                    )
-            else:
-                # Put the result back into the queue
-                self.output_queue.put(result)
-
-    async def call_async(self, model_key, func_name, *args, **kwargs) -> Any:
-        task_id = str(uuid.uuid4())
-        status = "processing"
-
-        self.input_queue.put((task_id, status, model_key, func_name, args, kwargs))
-
-        while True:
-            result = (
-                self.output_queue.get()
-            )
-            if result[0] == task_id:
-                if result[1] == "done":
-                    yield "result: " + str(result[2]) + "\n\n"
-                elif result[1] == "error":
-                    logger.error(sys.exc_info())
-                    logger.error(traceback.format_exc())
-                    raise Exception(f"Error processing task {task_id}: {result[2]}")
-                elif result[1] == "status":
-                    yield "status: " + str(result[2]) + "\n\n"
-                else:
-                    logger.error(sys.exc_info())
-                    logger.error(traceback.format_exc())
-                    raise Exception(
-                        f"Unexpected status for task {task_id}: {result[1]}"
-                    )
-            else:
-                # Put the result back into the queue
-                self.output_queue.put(result)
+    def call(self, model_key: str, func_name: str, *args, **kwargs) -> Any:
+        model = self.models.get(model_key)
+        if not model:
+            raise ValueError(f"Model '{model_key}' not found")
+            
+        func = getattr(model, func_name, None)
+        if not func:
+            raise ValueError(f"Function '{func_name}' not found on model '{model_key}'")
+            
+        return func(*args, **kwargs)
 
     def shutdown(self) -> None:
-        if self.process.is_alive():
-            self.input_queue.put((None, None, None, "shutdown", None, None))
-            self.process.join()
-        if not self.input_queue.empty():
-            self.input_queue.close()
-            self.input_queue.join_thread()
-        if not self.output_queue.empty():
-            self.output_queue.close()
-            self.output_queue.join_thread()
-        logger.info(str(f"Agent on GPU {self.device} shut down"))
-
-    def __del__(self):
-        self.shutdown()
-
-
-import os
-from collections import deque
-
+        self.models = None
+        torch.cuda.empty_cache()
+        logger.info(f"Agent on GPU {self.device} shut down")
 
 class AgentManager:
-    """
-    The AgentManager class manages the agents and the concept knowledge bases (KBs) for each user.
-    """
-
-    def __init__(
-        self,
-        agent_gpu_list: list[int] = AGENT_GPU_LIST,
-        concept_kb_dir: str = CONCEPT_KB_CKPT,
-        default_ckpt: str = DEFAULT_CKPT,
-    ) -> None:
-        """
-        The AgentManager class manages the agents and the concept knowledge bases (KBs) for each user.
-
-
-        Args:
-            agent_gpu_list (list[int], optional): List of GPU IDs to assign to each agent. Defaults to AGENT_GPU_LIST.
-        """
-        self.agents = {
-            f"agent{idx}": Agent(f"cuda:{gpuid}")
-            for idx, gpuid in enumerate(agent_gpu_list)
-        }
-        # Initialize a round-robin queue for distributing tasks
-        self.round_robin_queue = deque(self.agents.keys())
+    def __init__(self, agent_gpu_list: list[int] = AGENT_GPU_LIST,
+                    concept_kb_dir: str = CONCEPT_KB_CKPT,
+                    default_ckpt: str = DEFAULT_CKPT) -> None:
+        self.agent_gpu_list = agent_gpu_list
+        self.agents = {}
         self.concept_kb_dir = concept_kb_dir
         self.default_ckpt = default_ckpt
         self.cache_kb = {}
         self.checkpoint_path_dict = self.__init_checkpoint_path_dict()
         self.agent_concept_kb = {}
+        self.next_gpu_index = 0
+
+    def get_or_create_agent(self, user_id: str) -> Agent:
+        if user_id not in self.agents:
+            gpu_id = self.agent_gpu_list[self.next_gpu_index % len(self.agent_gpu_list)]
+            self.agents[user_id] = Agent(f"cuda:{gpu_id}")
+            self.next_gpu_index += 1
+        return self.agents[user_id]
 
     def __init_checkpoint_path_dict(self) -> dict[str, list[str]]:
-        """
-        Get the checkpoint path dictionary for each user. The dictionary contains the user IDs and their checkpoint paths order by time.
-
-        Returns:
-            dict[str, list[str]]: Dictionary of user IDs and their checkpoint paths.
-        """
         new_dict = {}
         for root, dirs, files in os.walk(self.concept_kb_dir):
             if root == self.concept_kb_dir:
                 continue
-            if len(files) > 0:
+            if files:
                 user_id = os.path.basename(root)
-                new_dict[user_id] = [os.path.join(root, file) for file in files]
-                new_dict[user_id].sort()
+                new_dict[user_id] = sorted([os.path.join(root, f) for f in files])
         return new_dict
 
     def shutdown(self):
         for agent in self.agents.values():
             agent.shutdown()
-
-        # Release the tensor from memory (if it's no longer needed)
         gc.collect()
-        # Additionally, to clear unused memory from the GPU cache
         torch.cuda.empty_cache()
 
-        logger.info(str("All agents shut down and concept KBs saved"))
+    def executeControllerFunctionNoSave(self, user_id: str, func, *args, **kwargs) -> Any:
+        agent = self.get_or_create_agent(user_id)
+        concept_kb, full_path = self.get_concept_kb(user_id, agent.device, get_temp=False)
+        
+        if self.agent_concept_kb.get(user_id) != full_path:
+            agent.call("controller", "load_kb", concept_kb)
+            self.agent_concept_kb[user_id] = full_path
+            
+        kwargs.pop("temp", None)
+        return agent.call("controller", func, *args, **kwargs)
 
-    def get_next_agent_key(self) -> str:
-        # Rotate the queue and return the next agent key
-        self.round_robin_queue.rotate(-1)
-        return self.round_robin_queue[0]
+    def executeControllerFunctionWithSave(self, user_id: str, func, *args, **kwargs) -> str:
+        agent = self.get_or_create_agent(user_id)
+        temp = kwargs.pop("temp", False)
+        
+        concept_kb, full_path = self.get_concept_kb(user_id, agent.device)
+        if self.agent_concept_kb.get(user_id) != full_path:
+            agent.call("controller", "load_kb", concept_kb)
+            self.agent_concept_kb[user_id] = full_path
 
-    ###################################
-    # Tasks related to the controller #
-    ###################################
-
-    def executeControllerFunctionNoSave(
-        self, user_id: str, func, *args, **kwargs
-    ) -> Any:
-        """
-        Execute a function in the controller without saving the concept knowledge base.
-
-        Args:
-            user_id (str): User ID
-            func (_type_): Function to execute
-            *args (_type_): Function arguments
-            **kwargs (_type_): Function keyword arguments
-
-        Raises:
-            Exception: Error in executeControllerFunctionNoSave
-
-        Returns:
-            Any: Function result
-        """
-        agent_key = self.get_next_agent_key()
-        concept_kb = None
-        try:
-            # load concept kb by user_id
-            concept_kb, full_path = self.get_concept_kb(
-                user_id, self.agents[agent_key].device, get_temp=False
-            )
-            if self.agent_concept_kb.get(agent_key, None) != full_path:
-                # Load user KB first
-                self.agents[agent_key].call("controller", "load_kb", concept_kb)
-                self.agent_concept_kb[agent_key] = full_path
-
-            # remove keyword temp if it is
-            if "temp" in kwargs:
-                del kwargs['temp']
-
-            # run and return result
-            return self.agents[agent_key].call("controller", func, *args, **kwargs)
-        except Exception as e:
-
-            logger.error(traceback.format_exc())
-            logger.error(sys.exc_info())
-            raise e
-        finally:
-            if concept_kb is not None:
-                for concept in concept_kb:
-                    concept.predictor.to("cpu")
-                gc.collect()  # Explicitly call garbage collector
-                # Optionally, you can clear the unused memory from the GPU cache
-                torch.cuda.empty_cache()
-
-    def executeControllerFunctionWithSave(
-        self, user_id: str, func, *args, **kwargs
-    ) -> str:
-        """
-        If the function is successful, save the concept knowledge base.
-
-
-        Args:
-            user_id (str): User ID
-            func (_type_): Function to execute
-
-        Raises:
-            Exception: _description_
-            Exception: _description_
-
-        Returns:
-            str: Checkpoint path
-        """
-        agent_key = self.get_next_agent_key()
-        concept_kb = None
-        temp = kwargs.get("temp", False)
-        try:
-            # load concept kb by user_id
-            concept_kb, full_path = self.get_concept_kb(
-                user_id, self.agents[agent_key].device
-            )
-            if self.agent_concept_kb.get(agent_key, None) != full_path:
-                # Load user KB first
-                self.agents[agent_key].call("controller", "load_kb", concept_kb)
-                self.agent_concept_kb[agent_key] = full_path
-
-            # remove keyword temp if it is
-            if "temp" in kwargs:
-                del kwargs["temp"]
-
-            # run and return result
-            concept_kb = self.agents[agent_key].call(
-                "controller", func, *args, **kwargs
-            )
-
-            # move concept kb to cpu
-            for concept in concept_kb:
-                concept.predictor.to("cpu")
-            ckpt_path = self.save_concept_kb(user_id, concept_kb, temp)
-            return ckpt_path
-        except Exception as e:
-            # General exception handling for any unexpected errors
-            logger.error(sys.exc_info())
-            logger.error(traceback.format_exc())
-            # raise Exception(f"Error in executeControllerFunctionWithSave: {str(e)}")
-            raise e
-        finally:
-            gc.collect()  # Explicitly call garbage collector
-            # Optionally, you can clear the unused memory from the GPU cache
-            torch.cuda.empty_cache()
+        concept_kb = agent.call("controller", func, *args, **kwargs)
+        for concept in concept_kb:
+            concept.predictor.to("cpu")
+            
+        ckpt_path = self.save_concept_kb(user_id, concept_kb, temp)
+        gc.collect()
+        torch.cuda.empty_cache()
+        return ckpt_path
 
     def executeRetrieverFunction(self, user_id: str, func, *args, **kwargs) -> Any:
-        """
-        Execute a function in the retriever.
-
-        Args:
-            func (): Function to execute
-
-        Raises:
-            Exception: Error in executeRetrieverFunction
-
-        Returns:
-            Any: Function result
-        """
-        agent_key = self.get_next_agent_key()
-        concept_kb, full_path = self.get_concept_kb(
-            user_id, self.agents[agent_key].device
-        )
-        try:
-            self.agents[agent_key].call("retriever", "load_kb", concept_kb)
-            result = self.agents[agent_key].call("retriever", func, *args, **kwargs)
-
-            for concept in concept_kb:
-                concept.predictor.to("cpu")
-            return result
-        except Exception as e:
-
-            logger.error(sys.exc_info())
-            logger.error(traceback.format_exc())
-            # raise Exception(f"Error in executeRetrieverFunction: {str(e)}")
-            raise e
+        agent = self.get_or_create_agent(user_id)
+        concept_kb, full_path = self.get_concept_kb(user_id, agent.device)
+        
+        agent.call("retriever", "load_kb", concept_kb)
+        result = agent.call("retriever", func, *args, **kwargs)
+        
+        for concept in concept_kb:
+            concept.predictor.to("cpu")
+        return result
 
     ##################
     # ConceptKB ops  #
@@ -475,27 +232,6 @@ class AgentManager:
         """
         logger.info(str(f"Getting concept KB for user {user_id}"))
 
-        # if user_id in self.checkpoint_path_dict:
-        #     concept_kb_path = self.checkpoint_path_dict[user_id][-1]
-        #     if concept_kb_path in self.cache_kb:
-        #         concept_kb = self.cache_kb[concept_kb_path]
-        #     else:
-        #         concept_kb = ConceptKB.load(concept_kb_path)
-        # else:
-        #     # load default concept kb
-        #     concept_kb = ConceptKB.load(self.default_ckpt)
-        #     # save default concept kb
-        #     os.makedirs(f"{self.concept_kb_dir}/{user_id}", exist_ok=True)
-        #     checkpoint_path = (
-        #         f"{self.concept_kb_dir}/{user_id}/concept_kb_epoch_{time.time()}.pt"
-        #     )
-        #     concept_kb.save(checkpoint_path)
-        #     self.checkpoint_path_dict[user_id] = [checkpoint_path]
-        #     self.cache_kb[checkpoint_path] = concept_kb
-
-        # if len(self.cache_kb) > 10:
-        #     self.cache_kb.pop(list(self.cache_kb.keys())[0])
-
         files = self.list_concept_dir(user_id, get_temp)
         logger.info(f"{files}")
         if len(files) == 0:
@@ -506,9 +242,10 @@ class AgentManager:
         else:
             full_path = os.path.join(self.concept_kb_dir, user_id, files[0])
             concept_kb = ConceptKB.load(full_path)
-
+        
         for concept in concept_kb:
-            concept.predictor.to(device)
+            if concept.predictor.device != device:
+                concept.predictor.to(device)
 
         return concept_kb, full_path
 
@@ -777,32 +514,28 @@ class AgentManager:
         else:
             return {"status": "success"}
 
-    def _loc_and_seg_single_image(self, image: PIL.Image.Image, concept_name: str):
+    def _loc_and_seg_single_image(self, image: PIL.Image.Image, concept_name: str, user_id: str):
         try:
             time_start = time.time()
             cache_dir = CACHE_DIR
             save_log_and_seg_concept_dir = LOC_SEG_CONCEPT_DIR
-            agent_key = self.get_next_agent_key()
-            loc_seg_output = self.agents[agent_key].call(
-                "loc_and_seg", "localize_and_segment", image
-            )
+            agent = self.get_or_create_agent(user_id)
+            
+            loc_seg_output = agent.call("loc_and_seg", "localize_and_segment", image)
 
-            # save log_seg_output to cache
             if not os.path.exists(save_log_and_seg_concept_dir):
                 os.makedirs(save_log_and_seg_concept_dir)
 
-            # save image to cache
             new_id = str(uuid.uuid4())
             image_path = os.path.join(cache_dir, f"{new_id}.jpg")
-            # save image to cache
             image.save(image_path)
 
             path = os.path.join(save_log_and_seg_concept_dir, new_id + ".pkl")
             with open(path, "wb") as f:
                 pickle.dump(loc_seg_output.cpu(), f)
-            logger.info(
-                str("Loc and seg single image time: " + str(time.time() - time_start))
-            )
+
+            logger.info(f"Loc and seg single image time: {time.time() - time_start}")
+
             return ConceptExample(
                 concept_name=concept_name,
                 image_path=image_path,
@@ -813,15 +546,12 @@ class AgentManager:
             image.close()
             torch.cuda.empty_cache()
 
-    def _loc_and_seg_multiple_images(
-        self, images: list[PIL.Image.Image], concept_name: str
-    ):
+    def _loc_and_seg_multiple_images(self, images: list[PIL.Image.Image], concept_name: str, user_id: str):
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = list(
-                executor.map(
-                    self._loc_and_seg_single_image, images, [concept_name] * len(images)
-                )
-            )
+            results = list(executor.map(
+                lambda img: self._loc_and_seg_single_image(img, concept_name, user_id), 
+                images
+            ))
         return results
 
     async def add_examples(
