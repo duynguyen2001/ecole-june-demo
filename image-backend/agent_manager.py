@@ -90,6 +90,9 @@ class Agent:
         default_kb.to(device)
 
         feature_pipeline = ConceptKBFeaturePipeline(loc_and_seg, feature_extractor)
+        feature_pipeline.loc_and_seg.config.do_segment = False
+        feature_pipeline.config.use_zs_attr_scores = False
+        feature_pipeline.config.do_segment= False
         controller = ExtendedController(default_kb, feature_pipeline)
         retriever = ExtendedCLIPConceptRetriever(
             default_kb.concepts, feature_extractor.clip, feature_extractor.processor
@@ -257,6 +260,7 @@ class AgentManager:
         self.default_ckpt = default_ckpt
         self.cache_kb = {}
         self.checkpoint_path_dict = self.__init_checkpoint_path_dict()
+        self.agent_concept_kb = {}
 
     def __init_checkpoint_path_dict(self) -> dict[str, list[str]]:
         """
@@ -317,10 +321,13 @@ class AgentManager:
         concept_kb = None
         try:
             # load concept kb by user_id
-            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device, get_temp=False)
-
-            # Load user KB first
-            self.agents[agent_key].call("controller", "load_kb", concept_kb)
+            concept_kb, full_path = self.get_concept_kb(
+                user_id, self.agents[agent_key].device, get_temp=False
+            )
+            if self.agent_concept_kb.get(agent_key, None) != full_path:
+                # Load user KB first
+                self.agents[agent_key].call("controller", "load_kb", concept_kb)
+                self.agent_concept_kb[agent_key] = full_path
 
             # remove keyword temp if it is
             if "temp" in kwargs:
@@ -364,9 +371,13 @@ class AgentManager:
         temp = kwargs.get("temp", False)
         try:
             # load concept kb by user_id
-            concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
-            # Load user KB first
-            self.agents[agent_key].call("controller", "load_kb", concept_kb)
+            concept_kb, full_path = self.get_concept_kb(
+                user_id, self.agents[agent_key].device
+            )
+            if self.agent_concept_kb.get(agent_key, None) != full_path:
+                # Load user KB first
+                self.agents[agent_key].call("controller", "load_kb", concept_kb)
+                self.agent_concept_kb[agent_key] = full_path
 
             # remove keyword temp if it is
             if "temp" in kwargs:
@@ -407,7 +418,9 @@ class AgentManager:
             Any: Function result
         """
         agent_key = self.get_next_agent_key()
-        concept_kb = self.get_concept_kb(user_id, self.agents[agent_key].device)
+        concept_kb, full_path = self.get_concept_kb(
+            user_id, self.agents[agent_key].device
+        )
         try:
             self.agents[agent_key].call("retriever", "load_kb", concept_kb)
             result = self.agents[agent_key].call("retriever", func, *args, **kwargs)
@@ -489,13 +502,15 @@ class AgentManager:
             concept_kb = ConceptKB.load(self.default_ckpt)
             # save default concept kb
             self.save_concept_kb(user_id, concept_kb)
+            full_path = os.path.join(self.concept_kb_dir, user_id, files[0])
         else:
             full_path = os.path.join(self.concept_kb_dir, user_id, files[0])
             concept_kb = ConceptKB.load(full_path)
 
         for concept in concept_kb:
             concept.predictor.to(device)
-        return concept_kb
+
+        return concept_kb, full_path
 
     def save_concept_kb(self, user_id: str, concept_kb: ConceptKB, temp = False) -> str:
         """
@@ -573,7 +588,7 @@ class AgentManager:
     ):
         """ """
         concept_name = concept_name.strip()
-        concept_kb = self.get_concept_kb(user_id)
+        concept_kb, full_path = self.get_concept_kb(user_id)
         if concept_name in concept_kb:
             # move concept kb to cpu
             for concept in concept_kb:
@@ -885,7 +900,6 @@ class AgentManager:
             user_id, "heatmap_image_comparison", image1, image2
         )
         return result
-
 
     def heatmap_class_difference(
         self,
