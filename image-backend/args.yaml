@@ -1,0 +1,55 @@
+img_dir: /shared/nas2/blume5/fa24/concept_downloading/data/image_annotations/24-10-22/annotations/merged_annotations/images
+object_mask_rle_dir: /shared/nas2/blume5/fa24/concept_downloading/data/image_annotations/24-10-22/annotations/merged_annotations/masks
+extract_label_from: directory
+negatives_img_dir: /shared/nas2/blume5/fa23/ecole/data/imagenet/negatives_rand_1k
+use_cached_features_on_ckpt_load: true
+cache:
+  root: /shared/nas2/blume5/fa23/ecole/cache/2024_december_1k/v1
+  segmentations: segmentations
+  features: features
+  infer_localize_from_component: false
+  negatives:
+    root: /shared/nas2/blume5/fa23/ecole/cache/2024_december_1k/v1
+    features: features
+    segmentations: segmentations
+use_wandb: true
+wandb_project: ecole_december_2024
+wandb_dir: /shared/nas2/blume5/fa23/ecole
+feature_pipeline_config:
+  compute_component_concept_scores: false
+  use_zs_attr_scores: false
+loc_and_seg_config:
+  do_localize: true
+  do_segment: false
+  remove_background: true
+  return_crops: true
+  use_bbox_for_crops: false
+example_sampler_config:
+  use_descendants_as_positives: true
+  use_containing_concepts_for_positives: false
+  negatives_strategy: use_siblings_as_negatives
+  random_seed: 42
+predictor:
+  use_ln: false
+  use_probabilities: false
+  use_full_img: true
+  use_regions: true
+  encode_class_in_zs_attr: false
+train:
+  n_epochs: 50
+  lr: 0.001
+  batch_size: 32
+  ckpt_every_n_epochs: 1
+  ckpt_dir: /shared/nas2/blume5/fa23/ecole/checkpoints/concept_kb
+  use_concepts_as_negatives: false
+  use_global_negatives: true
+  dataloader_kwargs:
+    num_workers: 0
+    pin_memory: false
+    persistent_workers: false
+  do_minimal: true
+  split:
+  - 0.6
+  - 0.0
+  - 0.4
+hierarchy_config_path: /shared/nas2/blume5/fa24/concept_downloading/data/image_annotations/24-10-22/annotations/merged_annotations/graph.yaml
